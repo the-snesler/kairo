@@ -1,0 +1,14 @@
+{
+  "name": "kairo",
+  "private": true,
+  "packageManager": "pnpm@10.17.0",
+  "scripts": {
+    "dev": "pnpm db:migrate && pnpm --filter @kairo/web dev",
+    "build": "pnpm --filter @kairo/web build",
+    "start": "pnpm --filter @kairo/web start",
+    "worker": "pnpm --filter @kairo/web worker",
+    "typecheck": "pnpm --filter @kairo/web typecheck",
+    "db:migrate": "pnpm --filter @kairo/db migrate",
+    "test": "pnpm -r test"
+  }
+}

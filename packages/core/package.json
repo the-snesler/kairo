@@ -1,0 +1,10 @@
+{
+  "name": "@kairo/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {".": "./src/index.ts"},
+  "scripts": {"test": "DATABASE_URL=:memory: tsx --test src/*.test.ts"},
+  "dependencies": {"@kairo/db": "workspace:*", "@kairo/integrations": "workspace:*", "drizzle-orm": "^0.45.3"},
+  "devDependencies": {"tsx": "^4.23.15"}
+}

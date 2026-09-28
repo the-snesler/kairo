@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+client_secret_*
+.DS_Store
+*.db
+*.db-shm
+*.db-wal
+data/
+node_modules/
+.pnpm-store/
+.output/
+.tanstack/
+dist/
+*.log

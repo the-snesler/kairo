@@ -1,0 +1,12 @@
+.git
+.env
+.env.*
+!.env.example
+client_secret_*
+node_modules
+**/node_modules
+.pnpm-store
+.output
+data
+*.db*
+*.log
