@@ -9,8 +9,8 @@ import IconPlus from '~icons/tabler/plus'
 import IconX from '~icons/tabler/x'
 import IconTrash from '~icons/tabler/trash'
 import IconGripVertical from '~icons/tabler/grip-vertical'
-import { addDays, dayKey, eventIntersectsDay, formatDateTimeLocal, formatTime, HOUR_HEIGHT, parseEventDate, sameDay, startOfDay, startOfWeek } from './date'
-import { timedSegments } from './layout'
+import { addDays, dayKey, eventIntersectsDay, formatDateTimeLocal, formatShortTime, formatTime, formatTimeRange, HOUR_HEIGHT, parseEventDate, sameDay, startOfDay, startOfWeek } from './date'
+import { inTopBar, timedSegments } from "./layout";
 import type { CalendarEvent, CalendarView, CalendarWorkspaceProps, EventDecision } from './types'
 import './calendar.css'
 
@@ -21,6 +21,9 @@ const STRIP_REBASE_DAYS = 14
 const HOURS = Array.from({ length: 24 }, (_, i) => i)
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const colorPattern = /^#[0-9a-f]{6}$/i
+// Keep in sync with .cal-event-title / .cal-event-time line heights and the card's vertical chrome in calendar.css.
+const TITLE_LINE_HEIGHT = 14
+const TIMED_CARD_CHROME = 22
 
 function safeColor(value: string | undefined, fallback = '#7894a8') {
   return value && colorPattern.test(value) ? value : fallback
@@ -34,10 +37,13 @@ function eventStyle(event: CalendarEvent, past: boolean): CSSProperties {
   const calendar = safeColor(event.calendarColor)
   const eventColor = safeColor(event.eventColor, calendar)
   return {
-    '--calendar-color': calendar,
-    '--event-color': eventColor,
-    '--event-body': event.kind === 'external' || event.kind === 'taskDue' ? 'transparent' : `color-mix(in srgb, ${eventColor} ${past ? '23%' : '60%'}, var(--cal-surface))`,
-  } as CSSProperties
+    "--calendar-color": calendar,
+    "--event-color": eventColor,
+    "--event-body":
+      event.kind === "external" || event.kind === "taskDue"
+        ? "transparent"
+        : `color-mix(in srgb, ${eventColor} ${past ? "23%" : "45%"}, var(--cal-surface))`,
+  } as CSSProperties;
 }
 
 function isDashed(event: CalendarEvent) {
@@ -53,29 +59,76 @@ interface EditorState {
   draft: Omit<CalendarEvent, 'id'> | null
 }
 
-function EventCard({ event, compact, past, onOpen, onPointerDown }: {
-  event: CalendarEvent
-  compact?: boolean
-  past: boolean
-  onOpen: (element: HTMLElement, event: CalendarEvent) => void
-  onPointerDown?: (event: ReactPointerEvent<HTMLElement>, item: CalendarEvent, resize: boolean) => void
+function EventCard({
+  event,
+  compact,
+  titleLines = 0,
+  past,
+  onOpen,
+  onPointerDown,
+}: {
+  event: CalendarEvent;
+  compact?: boolean;
+  /** Title lines that fit above the time row; 0 lays title and time out on a single line. */
+  titleLines?: number;
+  past: boolean;
+  onOpen: (element: HTMLElement, event: CalendarEvent) => void;
+  onPointerDown?: (
+    event: ReactPointerEvent<HTMLElement>,
+    item: CalendarEvent,
+    resize: boolean,
+  ) => void;
 }) {
-  const start = parseEventDate(event.start, event.allDay)
-  const end = parseEventDate(event.end, event.allDay)
-  const time = event.allDay ? '' : `${formatTime(start)}${compact ? '' : ` – ${formatTime(end)}`}`
-  return <div
-    className={`cal-event ${compact ? 'cal-event-compact' : ''} ${isDashed(event) ? 'cal-event-dashed' : ''} ${event.declined ? 'cal-event-declined' : ''} ${event.kind === 'taskBlock' ? 'cal-event-task' : ''} ${event.kind === 'taskDue' ? 'cal-event-due' : ''} ${past ? 'cal-event-past' : ''}`}
-    style={eventStyle(event, past)}
-    role={event.kind === 'taskDue' ? 'note' : 'button'} tabIndex={event.kind === 'taskDue' ? undefined : 0}
-    aria-label={`${event.title}${time ? `, ${time}` : ''}`}
-    onClick={e => { e.stopPropagation(); if (event.kind !== 'taskDue') onOpen(e.currentTarget, event) }}
-    onDoubleClick={e => e.stopPropagation()}
-    onKeyDown={e => { if (event.kind !== 'taskDue' && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(e.currentTarget, event) } }}
-    onPointerDown={e => onPointerDown?.(e, event, false)}
-  >
-    <span className="cal-event-title">{event.kind === 'taskBlock' && <IconGripVertical aria-hidden="true" />}{event.title}<span className="cal-event-time">{time}</span></span>
-    {!compact && canEdit(event) && onPointerDown && <span className="cal-event-resize" role="presentation" onPointerDown={e => { e.stopPropagation(); onPointerDown(e, event, true) }} />}
-  </div>
+  const start = parseEventDate(event.start, event.allDay);
+  const end = parseEventDate(event.end, event.allDay);
+  const inline = compact || titleLines < 1;
+  const time = inTopBar(event)
+    ? ""
+    : inline
+      ? formatShortTime(start)
+      : formatTimeRange(start, end);
+  return (
+    <div
+      className={`cal-event ${compact ? "cal-event-compact" : ""} ${inline ? "cal-event-inline" : ""} ${isDashed(event) ? "cal-event-dashed" : ""} ${event.declined ? "cal-event-declined" : ""} ${event.kind === "taskBlock" ? "cal-event-task" : ""} ${event.kind === "taskDue" ? "cal-event-due" : ""} ${past ? "cal-event-past" : ""}`}
+      style={
+        {
+          ...eventStyle(event, past),
+          "--title-lines": Math.max(titleLines, 1),
+        } as CSSProperties
+      }
+      role={event.kind === "taskDue" ? "note" : "button"}
+      tabIndex={event.kind === "taskDue" ? undefined : 0}
+      aria-label={`${event.title}${time ? `, ${time}` : ""}`}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (event.kind !== "taskDue") onOpen(e.currentTarget, event);
+      }}
+      onDoubleClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        if (event.kind !== "taskDue" && (e.key === "Enter" || e.key === " ")) {
+          e.preventDefault();
+          onOpen(e.currentTarget, event);
+        }
+      }}
+      onPointerDown={(e) => onPointerDown?.(e, event, false)}
+    >
+      <span className="cal-event-title">
+        {event.kind === "taskBlock" && <IconGripVertical aria-hidden="true" />}
+        {event.title}
+      </span>
+      {time && <span className="cal-event-time">{time}</span>}
+      {!compact && canEdit(event) && onPointerDown && (
+        <span
+          className="cal-event-resize"
+          role="presentation"
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            onPointerDown(e, event, true);
+          }}
+        />
+      )}
+    </div>
+  );
 }
 
 export function CalendarWorkspace(props: CalendarWorkspaceProps) {
@@ -343,7 +396,9 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
       if (!drag.moved && Math.abs(dx) + Math.abs(dy) < 5) return
       drag.moved = true
       const days = drag.resize ? 0 : Math.round(dx / columnWidth)
-      const minutes = drag.event.allDay ? 0 : Math.round(dy / HOUR_HEIGHT * 4) * 15
+      const minutes = inTopBar(drag.event)
+        ? 0
+        : Math.round((dy / HOUR_HEIGHT) * 4) * 15;
       const originalStart = parseEventDate(drag.event.start, drag.event.allDay)
       const originalEnd = parseEventDate(drag.event.end, drag.event.allDay)
       const start = drag.resize ? originalStart : addMinutes(addDays(originalStart, days), minutes)
@@ -381,79 +436,564 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
     for (const events of indexed.values()) events.sort((a, b) => Number(b.kind === 'taskDue') - Number(a.kind === 'taskDue'))
     return indexed
   }, [days, visibleEvents])
-  const allDayCount = Math.max(1, ...days.map(day => eventsByDay.get(dayKey(day))!.filter(event => event.allDay).length))
+  const allDayCount = Math.max(
+    1,
+    ...days.map((day) => eventsByDay.get(dayKey(day))!.filter(inTopBar).length),
+  );
   const monthFirst = new Date(date.getFullYear(), date.getMonth(), 1)
   const monthStart = startOfWeek(monthFirst)
   const monthDays = Array.from({ length: 42 }, (_, i) => addDays(monthStart, i))
   const monthLabel = new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(date)
 
-  return <section className="cal-workspace" aria-label="Calendar" style={{ '--hour-height': `${HOUR_HEIGHT}px` } as CSSProperties}>
-    {props.showToolbar !== false && <header className="cal-toolbar">
-      <div className="cal-heading"><h1>{monthLabel}</h1><span className="cal-zone">{props.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone}</span></div>
-      <div className="cal-controls">
-        <div className="cal-view-menu-wrap">
-          <button className="cal-button" type="button" aria-expanded={menuOpen} onClick={() => setMenuOpen(!menuOpen)}>{view[0].toUpperCase() + view.slice(1)} <IconChevronDown aria-hidden="true" /></button>
-          {menuOpen && <div className="cal-view-menu" role="menu">
-            {(['day', 'week', 'month'] as const).map(option => <button type="button" role="menuitemradio" aria-checked={view === option} key={option} onClick={() => setView(option)}>{option[0].toUpperCase() + option.slice(1)}{view === option && <span>✓</span>}</button>)}
-            <hr />
-            <label><input type="checkbox" checked={showDeclined} onChange={e => { if (props.showDeclined === undefined) setInternalDeclined(e.target.checked); props.onShowDeclinedChange?.(e.target.checked) }} /> Show declined</label>
-          </div>}
-        </div>
-        <button type="button" className="cal-button" onClick={jumpToday}>Today</button>
-        <button type="button" className="cal-icon-button" aria-label="Previous" onClick={() => navigate(-1)}><IconChevronLeft /></button>
-        <button type="button" className="cal-icon-button" aria-label="Next" onClick={() => navigate(1)}><IconChevronRight /></button>
-        {props.toolbarActions}
-      </div>
-    </header>}
-    {view === 'month' ? <div className="cal-month">
-      <div className="cal-month-head">{WEEKDAYS.map(day => <span key={day}>{day}</span>)}</div>
-      <div className="cal-month-grid">{monthDays.map(day => {
-        const items = visibleEvents.filter(event => eventIntersectsDay(parseEventDate(event.start, event.allDay), parseEventDate(event.end, event.allDay), day)).sort((a, b) => Number(b.kind === 'taskDue') - Number(a.kind === 'taskDue'))
-        const dropKey = `month-${dayKey(day)}`
-        return <div key={dayKey(day)} className={`cal-month-day ${day.getMonth() !== date.getMonth() ? 'cal-outside' : ''} ${dropTarget?.key === dropKey ? 'cal-drop-target' : ''}`} onDoubleClick={e => createAt(e.currentTarget, day, 9 * 60, true)} onDragOver={e => taskDragOver(e, dropKey)} onDragLeave={taskDragLeave} onDrop={e => taskDrop(e, day, 9 * 60)}>
-          <button type="button" className={`cal-month-date ${sameDay(day, today) ? 'cal-today' : ''}`} onClick={() => { setDate(day); setView('day') }}>{day.getDate()}</button>
-          <div className="cal-month-events">{items.slice(0, 4).map(event => <EventCard key={event.id} compact event={event} past={parseEventDate(event.end, event.allDay) < new Date()} onOpen={openEditor} />)}{items.length > 4 && <span className="cal-more">+{items.length - 4} more</span>}</div>
-        </div>
-      })}</div>
-    </div> : <div className="cal-timeline-shell" style={{ '--all-day-height': `min(${Math.max(58, allDayCount * 23 + 6)}px, max(58px, 35vh))` } as CSSProperties}>
-      <div className="cal-gutter-head"><span>All-day</span></div>
-      <div className="cal-scroll" ref={scroller} onScroll={onScroll}>
-        <div className="cal-strip" style={{ width: columnWidth * STRIP_DAYS }}>
-          <div className="cal-strip-head">{days.map(day => <div className={`cal-day-head ${sameDay(day, today) ? 'cal-current-day' : ''}`} key={dayKey(day)} style={{ width: columnWidth }}><span>{WEEKDAYS[day.getDay()]}</span><strong>{day.getDate()}</strong></div>)}</div>
-          <div className="cal-allday-row">{days.map(day => {
-            const dropKey = `all-${dayKey(day)}`
-            return <div key={dayKey(day)} className={`cal-allday-cell ${dropTarget?.key === dropKey ? 'cal-drop-target' : ''}`} style={{ width: columnWidth }} onDoubleClick={e => createAt(e.currentTarget, day, 0, true)} onDragOver={e => taskDragOver(e, dropKey)} onDragLeave={taskDragLeave} onDrop={e => taskDrop(e, day, 9 * 60)}>{eventsByDay.get(dayKey(day))!.filter(event => event.allDay).map(event => <EventCard key={event.id} compact event={event} past={parseEventDate(event.end, true) < new Date()} onOpen={(element, item) => { if (!suppressClickRef.current) openEditor(element, item) }} onPointerDown={startDrag} />)}</div>
-          })}</div>
-          <div className="cal-time-grid" ref={timeline} style={{ height: HOUR_HEIGHT * 24 }}>
-            {days.map(day => {
-              const dropKey = `time-${dayKey(day)}`
-              return <div className={`cal-time-day ${sameDay(day, today) ? 'cal-current-day' : ''} ${dropTarget?.key === dropKey ? 'cal-drop-target' : ''}`} key={dayKey(day)} style={{ width: columnWidth, '--drop-top': `${(dropTarget?.key === dropKey ? dropTarget.minutes ?? 0 : 0) / 60 * HOUR_HEIGHT}px` } as CSSProperties} onDoubleClick={e => { const box = e.currentTarget.getBoundingClientRect(); const minutes = Math.max(0, Math.min(23 * 60, Math.round((e.clientY - box.top) / HOUR_HEIGHT * 4) * 15)); createAt(e.currentTarget, day, minutes) }} onDragOver={e => taskDragOver(e, dropKey, dropMinute(e))} onDragLeave={taskDragLeave} onDrop={e => taskDrop(e, day, dropMinute(e))}>
-              {timedSegments(eventsByDay.get(dayKey(day))!, day, HOUR_HEIGHT).map(segment => <div key={`${segment.event.id}-${dayKey(day)}`} className="cal-event-position" style={{ top: segment.top, height: segment.height, left: `${segment.left}%`, width: `${segment.width}%` }}>
-                <EventCard event={segment.event} past={parseEventDate(segment.event.end) < new Date()} onOpen={(element, event) => { if (!suppressClickRef.current) openEditor(element, event) }} onPointerDown={startDrag} />
-              </div>)}
-            </div>})}
-            {days.some(day => sameDay(day, today)) && <div className="cal-now-line" style={{ left: `${days.findIndex(day => sameDay(day, today)) * columnWidth}px`, top: new Date().getHours() * HOUR_HEIGHT + new Date().getMinutes() / 60 * HOUR_HEIGHT, width: columnWidth }} />}
+  return (
+    <section
+      className="cal-workspace"
+      aria-label="Calendar"
+      style={{ "--hour-height": `${HOUR_HEIGHT}px` } as CSSProperties}
+    >
+      {props.showToolbar !== false && (
+        <header className="cal-toolbar">
+          <div className="cal-heading">
+            <h1>{monthLabel}</h1>
+            <span className="cal-zone">
+              {props.timeZone ??
+                Intl.DateTimeFormat().resolvedOptions().timeZone}
+            </span>
+          </div>
+          <div className="cal-controls">
+            <div className="cal-view-menu-wrap">
+              <button
+                className="cal-button"
+                type="button"
+                aria-expanded={menuOpen}
+                onClick={() => setMenuOpen(!menuOpen)}
+              >
+                {view[0].toUpperCase() + view.slice(1)}{" "}
+                <IconChevronDown aria-hidden="true" />
+              </button>
+              {menuOpen && (
+                <div className="cal-view-menu" role="menu">
+                  {(["day", "week", "month"] as const).map((option) => (
+                    <button
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={view === option}
+                      key={option}
+                      onClick={() => setView(option)}
+                    >
+                      {option[0].toUpperCase() + option.slice(1)}
+                      {view === option && <span>✓</span>}
+                    </button>
+                  ))}
+                  <hr />
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={showDeclined}
+                      onChange={(e) => {
+                        if (props.showDeclined === undefined)
+                          setInternalDeclined(e.target.checked);
+                        props.onShowDeclinedChange?.(e.target.checked);
+                      }}
+                    />{" "}
+                    Show declined
+                  </label>
+                </div>
+              )}
+            </div>
+            <button type="button" className="cal-button" onClick={jumpToday}>
+              Today
+            </button>
+            <button
+              type="button"
+              className="cal-icon-button"
+              aria-label="Previous"
+              onClick={() => navigate(-1)}
+            >
+              <IconChevronLeft />
+            </button>
+            <button
+              type="button"
+              className="cal-icon-button"
+              aria-label="Next"
+              onClick={() => navigate(1)}
+            >
+              <IconChevronRight />
+            </button>
+            {props.toolbarActions}
+          </div>
+        </header>
+      )}
+      {view === "month" ? (
+        <div className="cal-month">
+          <div className="cal-month-head">
+            {WEEKDAYS.map((day) => (
+              <span key={day}>{day}</span>
+            ))}
+          </div>
+          <div className="cal-month-grid">
+            {monthDays.map((day) => {
+              const items = visibleEvents
+                .filter((event) =>
+                  eventIntersectsDay(
+                    parseEventDate(event.start, event.allDay),
+                    parseEventDate(event.end, event.allDay),
+                    day,
+                  ),
+                )
+                .sort(
+                  (a, b) =>
+                    Number(b.kind === "taskDue") - Number(a.kind === "taskDue"),
+                );
+              const dropKey = `month-${dayKey(day)}`;
+              return (
+                <div
+                  key={dayKey(day)}
+                  className={`cal-month-day ${day.getMonth() !== date.getMonth() ? "cal-outside" : ""} ${dropTarget?.key === dropKey ? "cal-drop-target" : ""}`}
+                  onDoubleClick={(e) =>
+                    createAt(e.currentTarget, day, 9 * 60, true)
+                  }
+                  onDragOver={(e) => taskDragOver(e, dropKey)}
+                  onDragLeave={taskDragLeave}
+                  onDrop={(e) => taskDrop(e, day, 9 * 60)}
+                >
+                  <button
+                    type="button"
+                    className={`cal-month-date ${sameDay(day, today) ? "cal-today" : ""}`}
+                    onClick={() => {
+                      setDate(day);
+                      setView("day");
+                    }}
+                  >
+                    {day.getDate()}
+                  </button>
+                  <div className="cal-month-events">
+                    {items.slice(0, 4).map((event) => (
+                      <EventCard
+                        key={event.id}
+                        compact
+                        event={event}
+                        past={
+                          parseEventDate(event.end, event.allDay) < new Date()
+                        }
+                        onOpen={openEditor}
+                      />
+                    ))}
+                    {items.length > 4 && (
+                      <span className="cal-more">+{items.length - 4} more</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
-      </div>
-      <div className="cal-hour-labels-clip"><div className="cal-hour-labels" ref={hourLabels}>{HOURS.map(hour => <span key={hour} style={{ top: hour * HOUR_HEIGHT }}>{hour === 0 ? '' : formatTime(new Date(2024, 0, 1, hour))}</span>)}</div></div>
-    </div>}
-    <button className="cal-mobile-add" type="button" aria-label="New event" onClick={e => createAt(e.currentTarget, date, 9 * 60)}><IconPlus /></button>
-    {dropError && <div className="cal-drop-error" role="alert">{dropError}<button type="button" aria-label="Dismiss error" onClick={() => setDropError('')}><IconX /></button></div>}
-    {editor && <FloatingPortal><div ref={floating.refs.setFloating} style={floating.floatingStyles} {...getFloatingProps({ className: 'cal-editor', 'aria-label': editor.event ? 'Edit event' : 'New event' })}>
-      <div className="cal-editor-head"><strong>{editor.event ? editor.event.kind === 'external' ? 'Maybe event' : 'Event' : 'New event'}</strong><button type="button" aria-label="Close" onClick={() => setEditor(null)}><IconX /></button></div>
-      <div className="cal-editor-body">
-        <label>Title<input value={form.title} onChange={e => setForm(current => ({ ...current, title: e.target.value }))} readOnly={editor.event?.kind === 'external'} autoFocus /></label>
-        <div className="cal-editor-times"><label>Starts<input type="datetime-local" value={form.start} onChange={e => setForm(current => ({ ...current, start: e.target.value }))} readOnly={editor.event?.kind === 'external'} /></label><label>Ends<input type="datetime-local" value={form.end} onChange={e => setForm(current => ({ ...current, end: e.target.value }))} readOnly={editor.event?.kind === 'external'} /></label></div>
-        {editor.event?.kind !== 'external' && <label className="cal-checkbox-label"><input type="checkbox" checked={form.allDay} onChange={e => setForm(current => ({ ...current, allDay: e.target.checked }))} /> All day</label>}
-        {props.calendars && props.calendars.length > 0 && <label>Calendar<select value={form.calendarId} onChange={e => setForm(current => ({ ...current, calendarId: e.target.value }))}>{props.calendars.map(calendar => <option key={calendar.id} value={calendar.id}>{calendar.name}</option>)}</select></label>}
-        {editor.event?.kind !== 'external' && <><label>Event color<input type="color" value={safeColor(form.eventColor, safeColor(editor.event?.eventColor, '#7894a8'))} onChange={e => setForm(current => ({ ...current, eventColor: e.target.value }))} /></label><label>Location<input value={form.location} onChange={e => setForm(current => ({ ...current, location: e.target.value }))} /></label><label>Description<textarea rows={3} value={form.description} onChange={e => setForm(current => ({ ...current, description: e.target.value }))} /></label></>}
-        {editor.event?.recurring && <p className="cal-editor-note">Recurring events are read-only until instance and series editing are available.</p>}
-        {error && <p className="cal-editor-error" role="alert">{error}</p>}
-      </div>
-      <div className="cal-editor-actions">{editor.event?.kind === 'external' ? <div className="cal-decisions">{(['yes', 'maybe', 'no', 'undecided'] as const).map(decision => <button type="button" key={decision} disabled={busy || !props.onDecisionChange} className={editor.event?.decision === decision ? 'cal-selected' : ''} onClick={() => decide(decision)}>{decision[0].toUpperCase() + decision.slice(1)}</button>)}</div> : <><button type="button" className="cal-save" disabled={busy || !!editor.event && !canEdit(editor.event) || !form.title.trim() || (!editor.event && !props.onEventCreate) || (!!editor.event && !props.onEventChange)} onClick={save}>{busy ? 'Saving…' : 'Save'}</button>{editor.event && <button type="button" className="cal-delete" disabled={busy || !props.onEventDelete || !canEdit(editor.event)} aria-label="Delete event" onClick={remove}><IconTrash /></button>}</>}</div>
-    </div></FloatingPortal>}
-  </section>
+      ) : (
+        <div
+          className="cal-timeline-shell"
+          style={
+            {
+              "--all-day-height": `min(${Math.max(58, allDayCount * 23 + 6)}px, max(58px, 35vh))`,
+            } as CSSProperties
+          }
+        >
+          <div className="cal-gutter-head">
+            <span>All-day</span>
+          </div>
+          <div className="cal-scroll" ref={scroller} onScroll={onScroll}>
+            <div
+              className="cal-strip"
+              style={{ width: columnWidth * STRIP_DAYS }}
+            >
+              <div className="cal-strip-head">
+                {days.map((day) => (
+                  <div
+                    className={`cal-day-head ${sameDay(day, today) ? "cal-current-day" : ""}`}
+                    key={dayKey(day)}
+                    style={{ width: columnWidth }}
+                  >
+                    <span>{WEEKDAYS[day.getDay()]}</span>
+                    <strong>{day.getDate()}</strong>
+                  </div>
+                ))}
+              </div>
+              <div className="cal-allday-row">
+                {days.map((day) => {
+                  const dropKey = `all-${dayKey(day)}`;
+                  return (
+                    <div
+                      key={dayKey(day)}
+                      className={`cal-allday-cell ${dropTarget?.key === dropKey ? "cal-drop-target" : ""}`}
+                      style={{ width: columnWidth }}
+                      onDoubleClick={(e) =>
+                        createAt(e.currentTarget, day, 0, true)
+                      }
+                      onDragOver={(e) => taskDragOver(e, dropKey)}
+                      onDragLeave={taskDragLeave}
+                      onDrop={(e) => taskDrop(e, day, 9 * 60)}
+                    >
+                      {eventsByDay
+                        .get(dayKey(day))!
+                        .filter(inTopBar)
+                        .map((event) => (
+                          <EventCard
+                            key={event.id}
+                            compact
+                            event={event}
+                            past={
+                              parseEventDate(event.end, event.allDay) <
+                              new Date()
+                            }
+                            onOpen={(element, item) => {
+                              if (!suppressClickRef.current)
+                                openEditor(element, item);
+                            }}
+                            onPointerDown={startDrag}
+                          />
+                        ))}
+                    </div>
+                  );
+                })}
+              </div>
+              <div
+                className="cal-time-grid"
+                ref={timeline}
+                style={{ height: HOUR_HEIGHT * 24 }}
+              >
+                {days.map((day) => {
+                  const dropKey = `time-${dayKey(day)}`;
+                  return (
+                    <div
+                      className={`cal-time-day ${sameDay(day, today) ? "cal-current-day" : ""} ${dropTarget?.key === dropKey ? "cal-drop-target" : ""}`}
+                      key={dayKey(day)}
+                      style={
+                        {
+                          "width": columnWidth,
+                          "--drop-top": `${((dropTarget?.key === dropKey ? (dropTarget.minutes ?? 0) : 0) / 60) * HOUR_HEIGHT}px`,
+                        } as CSSProperties
+                      }
+                      onDoubleClick={(e) => {
+                        const box = e.currentTarget.getBoundingClientRect();
+                        const minutes = Math.max(
+                          0,
+                          Math.min(
+                            23 * 60,
+                            Math.round(
+                              ((e.clientY - box.top) / HOUR_HEIGHT) * 4,
+                            ) * 15,
+                          ),
+                        );
+                        createAt(e.currentTarget, day, minutes);
+                      }}
+                      onDragOver={(e) =>
+                        taskDragOver(e, dropKey, dropMinute(e))
+                      }
+                      onDragLeave={taskDragLeave}
+                      onDrop={(e) => taskDrop(e, day, dropMinute(e))}
+                    >
+                      {timedSegments(
+                        eventsByDay.get(dayKey(day))!,
+                        day,
+                        HOUR_HEIGHT,
+                      ).map((segment) => (
+                        <div
+                          key={`${segment.event.id}-${dayKey(day)}`}
+                          className="cal-event-position"
+                          style={{
+                            top: segment.top,
+                            height: segment.height,
+                            left: `${segment.left}%`,
+                            width: `${segment.width}%`,
+                            zIndex: 3 + segment.column,
+                          }}
+                        >
+                          <EventCard
+                            event={segment.event}
+                            titleLines={Math.floor(
+                              (segment.height - TIMED_CARD_CHROME) /
+                                TITLE_LINE_HEIGHT,
+                            )}
+                            past={
+                              parseEventDate(segment.event.end) < new Date()
+                            }
+                            onOpen={(element, event) => {
+                              if (!suppressClickRef.current)
+                                openEditor(element, event);
+                            }}
+                            onPointerDown={startDrag}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })}
+                {days.some((day) => sameDay(day, today)) && (
+                  <div
+                    className="cal-now-line"
+                    style={{
+                      left: `${days.findIndex((day) => sameDay(day, today)) * columnWidth}px`,
+                      top:
+                        new Date().getHours() * HOUR_HEIGHT +
+                        (new Date().getMinutes() / 60) * HOUR_HEIGHT,
+                      width: columnWidth,
+                    }}
+                  />
+                )}
+              </div>
+            </div>
+          </div>
+          <div className="cal-hour-labels-clip">
+            <div className="cal-hour-labels" ref={hourLabels}>
+              {HOURS.map((hour) => (
+                <span key={hour} style={{ top: hour * HOUR_HEIGHT }}>
+                  {hour === 0 ? "" : formatTime(new Date(2024, 0, 1, hour))}
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+      <button
+        className="cal-mobile-add"
+        type="button"
+        aria-label="New event"
+        onClick={(e) => createAt(e.currentTarget, date, 9 * 60)}
+      >
+        <IconPlus />
+      </button>
+      {dropError && (
+        <div className="cal-drop-error" role="alert">
+          {dropError}
+          <button
+            type="button"
+            aria-label="Dismiss error"
+            onClick={() => setDropError("")}
+          >
+            <IconX />
+          </button>
+        </div>
+      )}
+      {editor && (
+        <FloatingPortal>
+          <div
+            ref={floating.refs.setFloating}
+            style={floating.floatingStyles}
+            {...getFloatingProps({
+              "className": "cal-editor",
+              "aria-label": editor.event ? "Edit event" : "New event",
+            })}
+          >
+            <div className="cal-editor-head">
+              <strong>
+                {editor.event
+                  ? editor.event.kind === "external"
+                    ? "Maybe event"
+                    : "Event"
+                  : "New event"}
+              </strong>
+              <button
+                type="button"
+                aria-label="Close"
+                onClick={() => setEditor(null)}
+              >
+                <IconX />
+              </button>
+            </div>
+            <div className="cal-editor-body">
+              <label>
+                Title
+                <input
+                  value={form.title}
+                  onChange={(e) =>
+                    setForm((current) => ({
+                      ...current,
+                      title: e.target.value,
+                    }))
+                  }
+                  readOnly={editor.event?.kind === "external"}
+                  autoFocus
+                />
+              </label>
+              <div className="cal-editor-times">
+                <label>
+                  Starts
+                  <input
+                    type="datetime-local"
+                    value={form.start}
+                    onChange={(e) =>
+                      setForm((current) => ({
+                        ...current,
+                        start: e.target.value,
+                      }))
+                    }
+                    readOnly={editor.event?.kind === "external"}
+                  />
+                </label>
+                <label>
+                  Ends
+                  <input
+                    type="datetime-local"
+                    value={form.end}
+                    onChange={(e) =>
+                      setForm((current) => ({
+                        ...current,
+                        end: e.target.value,
+                      }))
+                    }
+                    readOnly={editor.event?.kind === "external"}
+                  />
+                </label>
+              </div>
+              {editor.event?.kind !== "external" && (
+                <label className="cal-checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={form.allDay}
+                    onChange={(e) =>
+                      setForm((current) => ({
+                        ...current,
+                        allDay: e.target.checked,
+                      }))
+                    }
+                  />{" "}
+                  All day
+                </label>
+              )}
+              {props.calendars && props.calendars.length > 0 && (
+                <label>
+                  Calendar
+                  <select
+                    value={form.calendarId}
+                    onChange={(e) =>
+                      setForm((current) => ({
+                        ...current,
+                        calendarId: e.target.value,
+                      }))
+                    }
+                  >
+                    {props.calendars.map((calendar) => (
+                      <option key={calendar.id} value={calendar.id}>
+                        {calendar.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {editor.event?.kind !== "external" && (
+                <>
+                  <label>
+                    Event color
+                    <input
+                      type="color"
+                      value={safeColor(
+                        form.eventColor,
+                        safeColor(editor.event?.eventColor, "#7894a8"),
+                      )}
+                      onChange={(e) =>
+                        setForm((current) => ({
+                          ...current,
+                          eventColor: e.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+                  <label>
+                    Location
+                    <input
+                      value={form.location}
+                      onChange={(e) =>
+                        setForm((current) => ({
+                          ...current,
+                          location: e.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+                  <label>
+                    Description
+                    <textarea
+                      rows={3}
+                      value={form.description}
+                      onChange={(e) =>
+                        setForm((current) => ({
+                          ...current,
+                          description: e.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+                </>
+              )}
+              {editor.event?.recurring && (
+                <p className="cal-editor-note">
+                  Recurring events are read-only until instance and series
+                  editing are available.
+                </p>
+              )}
+              {error && (
+                <p className="cal-editor-error" role="alert">
+                  {error}
+                </p>
+              )}
+            </div>
+            <div className="cal-editor-actions">
+              {editor.event?.kind === "external" ? (
+                <div className="cal-decisions">
+                  {(["yes", "maybe", "no", "undecided"] as const).map(
+                    (decision) => (
+                      <button
+                        type="button"
+                        key={decision}
+                        disabled={busy || !props.onDecisionChange}
+                        className={
+                          editor.event?.decision === decision
+                            ? "cal-selected"
+                            : ""
+                        }
+                        onClick={() => decide(decision)}
+                      >
+                        {decision[0].toUpperCase() + decision.slice(1)}
+                      </button>
+                    ),
+                  )}
+                </div>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className="cal-save"
+                    disabled={
+                      busy ||
+                      (!!editor.event && !canEdit(editor.event)) ||
+                      !form.title.trim() ||
+                      (!editor.event && !props.onEventCreate) ||
+                      (!!editor.event && !props.onEventChange)
+                    }
+                    onClick={save}
+                  >
+                    {busy ? "Saving…" : "Save"}
+                  </button>
+                  {editor.event && (
+                    <button
+                      type="button"
+                      className="cal-delete"
+                      disabled={
+                        busy || !props.onEventDelete || !canEdit(editor.event)
+                      }
+                      aria-label="Delete event"
+                      onClick={remove}
+                    >
+                      <IconTrash />
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        </FloatingPortal>
+      )}
+    </section>
+  );
 }
 
 export default CalendarWorkspace
