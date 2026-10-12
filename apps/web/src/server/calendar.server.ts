@@ -1,11 +1,12 @@
 import '@tanstack/react-start/server-only'
 import { and, eq } from 'drizzle-orm'
-import { db, accountAccess, calendar, eventDecision, eventProjection, externalEvent, googleEvent, icsSource, task, taskBlock, taskConnection, userCalendarSetting } from '@kairo/db'
-import { enqueueJob, normalizeGoogleEvent, reconcileProjection } from '@kairo/core'
+import { db, accountAccess, calendar, eventDecision, eventProjection, externalEvent, googleEvent, icsSource, task, taskConnection, taskEstimate, userCalendarSetting } from '@kairo/db'
+import { effectiveTaskDuration, enqueueJob, normalizeGoogleEvent, reconcileProjection } from '@kairo/core'
 import { GoogleApiError, type GoogleEvent } from '@kairo/integrations'
 import type { CalendarEvent } from '../features/calendar/types'
+import type { TaskSummary } from '../features/tasks/types'
 import { getAuthStatus, getSession, requireUser } from './auth'
-import { clientForCalendar, processJobs, syncAll, syncIcsSource } from './sync'
+import { clientForCalendar, connectionCanWrite, processJobs, syncAll, syncIcsSource, taskProviders } from './sync'
 
 async function ownedCalendar(userId: string, calendarId: string) {
   const [row] = await db.select({ cal: calendar, access: accountAccess }).from(calendar)
@@ -62,7 +63,6 @@ export async function getCalendarSnapshotImpl(data: { start: string; end: string
         lastError: projection.lastError }]
     })
   const storedGoogle = await db.select().from(googleEvent)
-  const storedBlocks = await db.select().from(taskBlock)
   const connections = await db.select().from(taskConnection).where(eq(taskConnection.ownerUserId, user.id))
   const connectionIds = new Set(connections.map((item) => item.id))
   const storedTasks = await db.select().from(task)
@@ -106,19 +106,29 @@ export async function getCalendarSnapshotImpl(data: { start: string; end: string
     const cal = choice?.destinationCalendarId ? calendars.find((candidate) => candidate.id === choice.destinationCalendarId) : null
     events.push({ id: item.id, kind: 'external', title: item.title, start: eventStart, end: eventEnd, allDay: item.allDay, calendarId: cal?.id, calendarColor: cal?.color || sourcesById.get(item.sourceId)?.color || '#8fc6ec', eventColor: cal?.color, decision: choice?.state || 'undecided', declined: choice?.state === 'no', description: item.description || undefined, location: item.location || undefined, editable: false })
   }
-  for (const block of storedBlocks) {
-    if (!calIds.has(block.calendarId) || !intersects(block.startAt.toISOString(), block.endAt.toISOString(), start, end)) continue
-    const linked = tasks.find((item) => item.id === block.taskId)
-    const cal = calendars.find((item) => item.id === block.calendarId)!
-    if (linked) events.push({ id: block.id, kind: 'taskBlock', taskId: linked.id, title: linked.content, start: block.startAt.toISOString(), end: block.endAt.toISOString(), calendarId: cal.id, calendarColor: cal.color, eventColor: '#5388ae', editable: true })
-  }
-  for (const item of tasks) {
-    const due = item.dueDate?.slice(0, 10)
-    if (!due || !/^\d{4}-\d{2}-\d{2}$/.test(due)) continue
-    const next = new Date(Date.parse(`${due}T00:00:00Z`) + 86400_000).toISOString().slice(0, 10)
-    if (intersects(due, next, start, end)) events.push({ id: `due:${item.id}`, kind: 'taskDue', taskId: item.id, title: `Due: ${item.content}`, start: due, end: next, allDay: true, editable: false })
-  }
-  return { calendars, sources: externalSources.map((item) => ({ id: item.id, name: item.name, color: item.color, status: item.status, lastError: item.lastError })), tasks: tasks.map((item) => ({ id: item.id, title: item.content, dueDate: item.dueDate, priority: item.priority, projectName: item.projectName })), events, conflicts, connections: { google: owned.length > 0, todoist: connections.some((item) => !!item.providerSubject && !!item.encryptedCredentials && item.status !== 'reconnect'), todoistNeedsReconnect: connections.some((item) => item.status === 'reconnect' || !item.providerSubject) }, errors: [...calendars.filter((item) => item.lastError).map((item) => `${item.name}: ${item.lastError}`), ...externalSources.filter((item) => item.lastError).map((item) => `${item.name}: ${item.lastError}`), ...connections.filter((item) => item.lastError).map((item) => `Todoist: ${item.lastError}`)] }
+  const estimates = await db.select({ taskId: taskEstimate.taskId, minutes: taskEstimate.minutes }).from(taskEstimate)
+    .innerJoin(task, eq(taskEstimate.taskId, task.id)).innerJoin(taskConnection, eq(task.connectionId, taskConnection.id)).where(eq(taskConnection.ownerUserId, user.id))
+  const estimateBy = new Map(estimates.map((item) => [item.taskId, item.minutes]))
+  const connectionsById = new Map(connections.map((item) => [item.id, item]))
+  const summaries: TaskSummary[] = tasks.map((item) => {
+    const duration = effectiveTaskDuration(item, estimateBy.get(item.id))
+    const connection = connectionsById.get(item.connectionId)!
+    return { id: item.id, title: item.content, description: item.description, projectName: item.projectName, priority: item.priority,
+      due: item.dueDateTime ? { dateTime: item.dueDateTime.toISOString() } : item.dueDate ? { date: item.dueDate.slice(0, 10) } : null,
+      recurring: item.dueRecurring, durationMinutes: duration.minutes, durationSource: duration.source, completed: item.completed,
+      url: taskProviders[connection.provider]?.taskUrl?.(item.todoistId) ?? null, pending: !!item.pendingPatch }
+  })
+  const writable = new Map(connections.map((item) => [item.id, connectionCanWrite(item)]))
+  summaries.forEach((summary, index) => {
+    if (!summary.due) return
+    const editable = writable.get(tasks[index].connectionId)!
+    const due = summary.due
+    const timed = 'dateTime' in due
+    const eventStart = 'dateTime' in due ? due.dateTime : due.date
+    const eventEnd = timed ? new Date(Date.parse(eventStart) + summary.durationMinutes * 60_000).toISOString() : new Date(Date.parse(`${eventStart}T00:00:00Z`) + 86400_000).toISOString().slice(0, 10)
+    if (intersects(eventStart, eventEnd, start, end)) events.push({ id: `task:${summary.id}`, kind: 'task', taskId: summary.id, task: summary, title: summary.title, start: eventStart, end: eventEnd, allDay: !timed, editable })
+  })
+  return { calendars, sources: externalSources.map((item) => ({ id: item.id, name: item.name, color: item.color, status: item.status, lastError: item.lastError })), tasks: summaries, events, conflicts, connections: { google: owned.length > 0, todoist: connections.some((item) => !!item.providerSubject && !!item.encryptedCredentials && item.status !== 'reconnect'), todoistNeedsReconnect: connections.some((item) => item.status === 'reconnect' || !item.providerSubject), todoistCanWrite: connections.some((item) => !!item.providerSubject && !!item.encryptedCredentials && connectionCanWrite(item)) }, errors: [...calendars.filter((item) => item.lastError).map((item) => `${item.name}: ${item.lastError}`), ...externalSources.filter((item) => item.lastError).map((item) => `${item.name}: ${item.lastError}`), ...connections.filter((item) => item.lastError).map((item) => `Todoist: ${item.lastError}`)] }
 }
 
 export async function resolveProjectionConflictImpl(data: { id: string; action: 'restore' | 'keep-google' | 'remove-decision' }) {
@@ -275,47 +285,5 @@ export async function deleteGoogleEventImpl(data: { id: string }) {
   const { client } = await clientForCalendar(row.cal.id, user.id)
   await client.deleteEvent(row.cal.googleCalendarId, row.event.googleEventId, row.event.etag || undefined)
   await db.delete(googleEvent).where(eq(googleEvent.id, row.event.id))
-  return { ok: true }
-}
-
-export async function saveTaskBlockImpl(data: { id?: string; taskId: string; calendarId: string; start: string; end: string }) {
-  const user = await requireUser()
-  const cal = await ownedCalendar(user.id, data.calendarId)
-  if (!['owner', 'writer'].includes(cal.accessRole || '')) throw new Error('Calendar is read only')
-  const start = new Date(data.start), end = new Date(data.end)
-  if (end <= start) throw new Error('Block end must follow start')
-  const [linked] = await db.select({ item: task }).from(task).innerJoin(taskConnection, eq(task.connectionId, taskConnection.id))
-    .where(and(eq(task.id, data.taskId), eq(taskConnection.ownerUserId, user.id)))
-  if (!linked) throw new Response('Task unavailable', { status: 404 })
-  let saved
-  if (data.id) {
-    const [old] = await db.select().from(taskBlock).where(and(eq(taskBlock.id, data.id), eq(taskBlock.taskId, data.taskId)))
-    if (!old) throw new Response('Block unavailable', { status: 404 })
-    let googleEventId = old.googleEventId, lastAppliedEtag = old.lastAppliedEtag
-    if (old.calendarId !== cal.id && old.googleEventId) {
-      const source = await ownedCalendar(user.id, old.calendarId)
-      const { client: sourceClient } = await clientForCalendar(source.id, user.id)
-      const moved = await sourceClient.moveEvent(source.googleCalendarId, old.googleEventId, cal.googleCalendarId)
-      googleEventId = moved.id; lastAppliedEtag = moved.etag || null
-    }
-    ;[saved] = await db.update(taskBlock).set({ startAt: start, endAt: end, calendarId: cal.id, googleEventId, lastAppliedEtag, syncState: 'pending', updatedAt: new Date() }).where(eq(taskBlock.id, old.id)).returning()
-  } else [saved] = await db.insert(taskBlock).values({ taskId: data.taskId, calendarId: cal.id, startAt: start, endAt: end }).returning()
-  await enqueueJob(db, 'task-block', saved.id)
-  void processJobs().catch((error) => console.error('Task block sync failed', error))
-  return { id: saved.id }
-}
-
-export async function deleteTaskBlockImpl(data: { id: string }) {
-  const user = await requireUser()
-  const [row] = await db.select({ block: taskBlock, cal: calendar }).from(taskBlock)
-    .innerJoin(calendar, eq(taskBlock.calendarId, calendar.id))
-    .innerJoin(accountAccess, eq(calendar.connectedAccountId, accountAccess.connectedAccountId))
-    .where(and(eq(taskBlock.id, data.id), eq(accountAccess.userId, user.id)))
-  if (!row) throw new Response('Block unavailable', { status: 404 })
-  if (row.block.googleEventId) {
-    const { client } = await clientForCalendar(row.cal.id, user.id)
-    await client.deleteEvent(row.cal.googleCalendarId, row.block.googleEventId, row.block.lastAppliedEtag || undefined)
-  }
-  await db.delete(taskBlock).where(eq(taskBlock.id, row.block.id))
   return { ok: true }
 }

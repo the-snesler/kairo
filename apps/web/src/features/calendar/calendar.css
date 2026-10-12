@@ -1,5 +1,6 @@
 .cal-workspace,
-.cal-editor {
+.cal-editor,
+.cal-drag-ghost {
   --cal-surface: var(--color-canvas, #1a1d20);
   --cal-surface-raised: var(--color-elevated, #252a2e);
   --cal-text: var(--color-text, #eff1f2);
@@ -240,23 +241,34 @@
 .cal-time-day.cal-current-day {
   background-color: color-mix(in srgb, var(--cal-surface), white 1.5%);
 }
-.cal-time-day.cal-drop-target::after {
-  background: color-mix(in srgb, var(--color-accent, #a78bfa), transparent 76%);
-  border: 1px solid var(--color-accent, #a78bfa);
-  border-radius: 5px;
-  content: "";
-  height: var(--hour-height);
-  left: 3px;
+.cal-drop-preview {
+  background: color-mix(in srgb, var(--color-accent, #a78bfa), transparent 80%);
+  border: 1.5px dashed var(--color-accent, #a78bfa);
+  border-radius: 6px;
+  box-sizing: border-box;
+  color: var(--cal-text);
+  font-size: 10px;
+  left: 2px;
+  line-height: 12px;
+  overflow: hidden;
+  padding: 2px 6px;
   pointer-events: none;
   position: absolute;
   right: 3px;
-  top: var(--drop-top);
+  white-space: nowrap;
   z-index: 9;
 }
 .cal-allday-cell.cal-drop-target,
 .cal-month-day.cal-drop-target {
   background: color-mix(in srgb, var(--color-accent, #a78bfa), transparent 82%);
-  outline: 1px solid var(--color-accent, #a78bfa);
+  outline: 1px dashed var(--color-accent, #a78bfa);
+  outline-offset: -2px;
+}
+.cal-allday-cell.cal-drop-invalid,
+.cal-month-day.cal-drop-invalid,
+.cal-time-day.cal-drop-invalid {
+  background-color: color-mix(in srgb, #ec6159, transparent 90%);
+  outline: 1px dashed color-mix(in srgb, #ec6159, transparent 30%);
   outline-offset: -2px;
 }
 .cal-hour-labels-clip {
@@ -325,7 +337,7 @@
   position: relative;
   user-select: none;
 }
-.cal-event:not(.cal-event-dashed):not(.cal-event-due)::before {
+.cal-event:not(.cal-event-dashed):not(.cal-event-task)::before {
   background: var(--calendar-color);
   bottom: 0;
   content: "";
@@ -388,22 +400,91 @@
   min-height: 20px;
   padding: 2px 5px;
 }
-.cal-event-due {
+.cal-event-task {
+  border: 1px solid color-mix(in srgb, var(--calendar-color), transparent 35%);
+  padding-left: 5px;
+}
+.cal-event-task.cal-event-compact {
+  min-height: 18px;
+  padding: 1px 5px 1px 4px;
+}
+.cal-task-check {
+  align-items: center;
   background: transparent;
-  border: 1px solid color-mix(in srgb, var(--calendar-color), white 12%);
+  border: 1.5px solid color-mix(in srgb, var(--calendar-color), white 20%);
+  border-radius: 50%;
+  box-sizing: border-box;
+  color: var(--cal-surface);
+  cursor: pointer;
+  display: inline-flex;
+  flex: none;
+  height: 11px;
+  justify-content: center;
+  margin: 0 4px 0 0;
+  padding: 0;
+  vertical-align: -1.5px;
+  width: 11px;
+}
+.cal-task-check:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--calendar-color), transparent 55%);
+}
+.cal-task-check:disabled {
+  cursor: inherit;
+}
+.cal-task-check svg {
+  height: 8px;
+  width: 8px;
+}
+.cal-event-completed .cal-task-check {
+  background: var(--calendar-color);
+}
+.cal-event-completed .cal-event-title {
   color: var(--cal-muted);
-  cursor: default;
+  text-decoration: line-through;
 }
-.cal-event-due:hover {
-  filter: none;
+.cal-event-pending {
+  opacity: 0.75;
 }
-.cal-event-due.cal-event-compact {
-  min-height: 17px;
-  padding: 1px 4px;
+.cal-event-draggable {
+  cursor: grab;
 }
-.cal-event-due .cal-event-title {
-  font-size: 10px;
-  font-weight: 500;
+.cal-event-dragging {
+  opacity: 0.35;
+}
+.cal-drag-ghost {
+  font:
+    13px/1.4 Inter,
+    ui-sans-serif,
+    system-ui,
+    sans-serif;
+  left: 0;
+  pointer-events: none;
+  position: fixed;
+  top: 0;
+  will-change: transform;
+  z-index: 1000;
+}
+.cal-drag-ghost .cal-event {
+  box-shadow: 0 10px 24px #0008, 0 0 0 1px var(--cal-surface);
+  filter: brightness(1.08);
+  height: 100%;
+}
+.cal-drag-ghost-invalid .cal-event {
+  opacity: 0.6;
+}
+html.cal-drag-active,
+html.cal-drag-active * {
+  cursor: grabbing !important;
+  -webkit-user-select: none !important;
+  user-select: none !important;
+}
+html.cal-drag-active.cal-drag-resize,
+html.cal-drag-active.cal-drag-resize * {
+  cursor: ns-resize !important;
+}
+html.cal-drag-active.cal-drag-invalid,
+html.cal-drag-active.cal-drag-invalid * {
+  cursor: no-drop !important;
 }
 .cal-event-dashed {
   background: transparent;
@@ -417,7 +498,7 @@
 .cal-event-past {
   color: color-mix(in srgb, var(--cal-text), var(--cal-surface) 25%);
 }
-.cal-event-past:not(.cal-event-dashed):not(.cal-event-due)::before {
+.cal-event-past:not(.cal-event-dashed):not(.cal-event-task)::before {
   background: color-mix(in srgb, var(--calendar-color), var(--cal-surface) 42%);
 }
 .cal-event-dashed.cal-event-past {

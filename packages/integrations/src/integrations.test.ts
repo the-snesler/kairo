@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { GoogleCalendarClient, syncGoogleEvents } from './google/index.js';
 import { parseIcs } from './ics/index.js';
-import { exchangeTodoistCode, refreshTodoistToken, syncTodoist, todoistAuthorizationUrl } from './todoist/index.js';
+import { createTodoistProvider, exchangeTodoistCode, floatingToInstant, instantToFloating, refreshTodoistToken, syncTodoist, todoistAuthorizationUrl } from './todoist/index.js';
+import { TaskPatchError } from './tasks.js';
 
 test('Google sync follows pages and commits only the final cursor', async () => {
   const requests: URL[] = [];
@@ -49,11 +50,11 @@ test('Todoist uses the v1 form sync contract', async () => {
   assert.equal(result.sync_token, 'next');
 });
 
-test('Todoist OAuth requests read scope and exchanges a code', async () => {
+test('Todoist OAuth requests read-write scope and exchanges a code', async () => {
   const credentials = { clientId: 'client', clientSecret: 'secret', redirectUri: 'http://localhost:3000/api/todoist/callback' };
   const url = new URL(todoistAuthorizationUrl(credentials, 'csrf-state'));
   assert.equal(url.origin, 'https://app.todoist.com');
-  assert.equal(url.searchParams.get('scope'), 'data:read');
+  assert.equal(url.searchParams.get('scope'), 'data:read_write');
   assert.equal(url.searchParams.get('state'), 'csrf-state');
   const token = await exchangeTodoistCode(credentials, 'code', async (input, init) => {
     assert.equal(input, 'https://api.todoist.com/oauth/access_token');
@@ -74,4 +75,79 @@ test('Todoist refresh requests a rotated token', async () => {
     return Response.json({ access_token: 'new-access', refresh_token: 'new-refresh', expires_in: 3600 });
   });
   assert.equal(token.refresh_token, 'new-refresh');
+});
+
+test('Todoist floating times convert through the user timezone', () => {
+  assert.equal(floatingToInstant('2026-03-08T10:00:00.000000', 'America/Chicago').toISOString(), '2026-03-08T15:00:00.000Z');
+  assert.equal(floatingToInstant('2026-01-15T10:00:00', 'America/Chicago').toISOString(), '2026-01-15T16:00:00.000Z');
+  assert.equal(instantToFloating('2026-07-01T15:30:00.000Z', 'America/Chicago'), '2026-07-01T10:30:00');
+});
+
+test('Todoist provider sync normalizes dues, projects, and keeps the timezone in its cursor', async () => {
+  const bodies: URLSearchParams[] = [];
+  const provider = createTodoistProvider({ fetch: async (_input, init) => {
+    const body = init?.body as URLSearchParams; bodies.push(body);
+    return Response.json(body.get('sync_token') === '*' ? { sync_token: 's1', full_sync: true, user: { tz_info: { timezone: 'America/Chicago' } },
+      projects: [{ id: 'p', name: 'Home' }], items: [
+        { id: 'a', content: 'All day', project_id: 'p', due: { date: '2026-10-12', string: 'every day', is_recurring: true } },
+        { id: 'b', content: 'Floating', due: { date: '2026-10-12T09:00:00.000000', timezone: null, string: 'Oct 12 9am' } },
+        { id: 'c', content: 'Fixed', due: { date: '2026-10-12T14:00:00.000000Z', timezone: 'Europe/Madrid' }, duration: { amount: 2, unit: 'day' } }] }
+      : { sync_token: 's2', full_sync: false, items: [{ id: 'd', content: 'Later', due: { date: '2026-10-13T09:00:00' } }] });
+  } });
+  const first = await provider.sync('token', 'legacy-plain-token');
+  assert.equal(bodies[0].get('sync_token'), '*');
+  assert.equal(bodies[0].get('resource_types'), '["items","projects","user"]');
+  assert.deepEqual(first.tasks[0].due, { date: '2026-10-12', timeZone: null, string: 'every day', recurring: true });
+  assert.equal(first.tasks[0].projectName, 'Home');
+  assert.deepEqual(first.tasks[1].due, { dateTime: '2026-10-12T14:00:00.000Z', timeZone: null, string: 'Oct 12 9am', recurring: false });
+  assert.equal(first.tasks[2].due && 'dateTime' in first.tasks[2].due && first.tasks[2].due.dateTime, '2026-10-12T14:00:00.000Z');
+  assert.equal(first.tasks[2].durationMinutes, 2880);
+  const second = await provider.sync('token', first.cursor);
+  assert.equal(bodies[1].get('sync_token'), 's1');
+  assert.equal(second.tasks[0].due && 'dateTime' in second.tasks[0].due && second.tasks[0].due.dateTime, '2026-10-13T14:00:00.000Z');
+});
+
+test('Todoist provider update sends sync commands and preserves recurrence', async () => {
+  const requests: { url: string; body?: URLSearchParams }[] = [];
+  let currentDue: Record<string, unknown> | null = { date: '2026-10-12T09:00:00', timezone: null, string: 'every weekday at 9am', lang: 'en', is_recurring: true };
+  const provider = createTodoistProvider({ fetch: async (input, init) => {
+    const url = String(input); requests.push({ url, body: init?.body as URLSearchParams });
+    if (url.endsWith('/tasks/t1')) return Response.json({ id: 't1', due: currentDue });
+    if (url.endsWith('/user')) return Response.json({ id: 'u', tz_info: { timezone: 'America/Chicago' } });
+    const commands = JSON.parse((init?.body as URLSearchParams).get('commands')!) as { uuid: string }[];
+    return Response.json({ sync_status: Object.fromEntries(commands.map(command => [command.uuid, 'ok'])) });
+  } });
+  await provider.update('token', 't1', { title: 'Renamed', due: { dateTime: '2026-10-13T16:00:00.000Z' }, completed: true });
+  const sync = requests.find(request => request.url === 'https://api.todoist.com/api/v1/sync')!;
+  const commands = JSON.parse(sync.body!.get('commands')!);
+  assert.deepEqual(commands.map((command: { type: string; args: unknown }) => [command.type, command.args]), [
+    ['item_update', { id: 't1', content: 'Renamed', due: { date: '2026-10-13T11:00:00', string: 'every weekday at 9am', lang: 'en', is_recurring: true } }],
+    ['item_close', { id: 't1' }]]);
+  await assert.rejects(() => provider.update('token', 't1', { due: { date: '2026-10-14' } }), TaskPatchError);
+  await assert.rejects(() => provider.update('token', 't1', { due: null }), TaskPatchError);
+
+  currentDue = { date: '2026-10-12T07:00:00.000000Z', timezone: 'Europe/Madrid', string: 'Oct 12 9am', is_recurring: false };
+  requests.length = 0;
+  await provider.update('token', 't1', { due: { dateTime: '2026-10-13T16:00:00.000Z' } });
+  assert.deepEqual(JSON.parse(requests.at(-1)!.body!.get('commands')!)[0].args, { id: 't1', due: { date: '2026-10-13T16:00:00Z', timezone: 'Europe/Madrid' } });
+  requests.length = 0;
+  await provider.update('token', 't1', { due: null, completed: false });
+  assert.deepEqual(JSON.parse(requests.at(-1)!.body!.get('commands')!).map((command: { type: string; args: unknown }) => [command.type, command.args]),
+    [['item_update', { id: 't1', due: null }], ['item_uncomplete', { id: 't1' }]]);
+
+  // Stored state + cursor timezone: one request, and a recurring "uncomplete" only restores the due.
+  requests.length = 0;
+  await provider.update('token', 't1', { due: { dateTime: '2026-10-13T16:00:00.000Z' }, completed: false }, {
+    current: { timed: true, recurring: true, string: 'every day at 9am', timeZone: null }, cursor: JSON.stringify({ v: 1, token: 's', tz: 'America/Chicago' }) });
+  assert.equal(requests.length, 1);
+  assert.deepEqual(JSON.parse(requests[0].body!.get('commands')!).map((command: { type: string; args: unknown }) => [command.type, command.args]),
+    [['item_update', { id: 't1', due: { date: '2026-10-13T11:00:00', string: 'every day at 9am', is_recurring: true } }]]);
+});
+
+test('Todoist command errors surface as patch errors', async () => {
+  const provider = createTodoistProvider({ fetch: async (_input, init) => {
+    const [command] = JSON.parse((init?.body as URLSearchParams).get('commands')!) as { uuid: string }[];
+    return Response.json({ sync_status: { [command.uuid]: { error: 'Item not found', error_code: 22, http_code: 404 } } });
+  } });
+  await assert.rejects(() => provider.update('token', 'missing', { title: 'x' }), TaskPatchError);
 });

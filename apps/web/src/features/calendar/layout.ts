@@ -1,4 +1,4 @@
-import { addDays, DAY_MS, eventIntersectsDay, minuteOfDay, parseEventDate, startOfDay } from './date'
+import { addDays, DAY_MS, dayKey, eventIntersectsDay, minuteOfDay, parseEventDate, startOfDay } from './date'
 import type { CalendarEvent } from './types'
 
 // How far, as a fraction of a column, an event reaches under its right-hand neighbour.
@@ -12,6 +12,15 @@ export interface TimedSegment {
   width: number
   column: number
   columns: number
+}
+
+/** Derives a task card's start/end from its single due date: all-day for a date, start + duration for a time. */
+export function normalizeTaskEvent(event: CalendarEvent): CalendarEvent {
+  const due = event.kind === 'task' ? event.task?.due : null
+  if (!due || !event.task) return event
+  if ('date' in due) return { ...event, start: due.date, end: dayKey(addDays(parseEventDate(due.date, true), 1)), allDay: true }
+  const start = new Date(due.dateTime)
+  return { ...event, start: start.toISOString(), end: new Date(start.getTime() + Math.max(event.task.durationMinutes, 1) * 60_000).toISOString(), allDay: false }
 }
 
 /** All-day events and timed events lasting a full day or more render in the top bar instead of the time grid. */

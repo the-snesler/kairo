@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto'
 import { exchangeTodoistCode, getTodoistUser, todoistAuthorizationUrl } from '@kairo/integrations'
 import { requireUser } from './auth'
 import { decryptJson, encryptJson, todoistCredentials } from './credentials'
-import { saveTodoistConnection, syncTodoistConnection } from './sync'
+import { processJobs, resumePendingPushes, saveTodoistConnection, syncTodoistConnection } from './sync'
 
 type State = { userId: string; state: string; expiresAt: number }
 const cookieName = 'kairo_todoist_state'
@@ -35,6 +35,8 @@ export async function handleTodoistCallback(request: Request) {
     const subject = await getTodoistUser(tokens.access_token)
     const connection = await saveTodoistConnection(user.id, subject.id, tokens)
     await syncTodoistConnection(connection.id).catch((error) => console.error('Initial Todoist sync failed', error))
+    await resumePendingPushes(connection.id)
+    void processJobs().catch((error) => console.error('Task push failed', error))
     return new Response(null, { status: 302, headers: { Location: '/?connected=todoist', 'Set-Cookie': clear } })
   } catch (error) {
     return new Response(null, { status: 302, headers: { Location: `/?error=${encodeURIComponent(String(error))}`, 'Set-Cookie': clear } })

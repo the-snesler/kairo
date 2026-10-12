@@ -1,12 +1,22 @@
-import { and, eq } from 'drizzle-orm'
-import { db, accountAccess, calendar, connectedAccount, googleEvent, icsSource, taskConnection, userCalendarSetting } from '@kairo/db'
-import { applyGoogleSnapshot, applyIcsSnapshot, applyTodoistSync, finishJob, leaseJobs, reconcileProjection, reconcileTaskBlock } from '@kairo/core'
-import { fetchIcs, GoogleCalendarClient, parseIcs, refreshGoogleToken, refreshTodoistToken, syncGoogleEvents, syncTodoist, TodoistApiError, type TodoistOAuthToken } from '@kairo/integrations'
+import { and, eq, isNotNull } from 'drizzle-orm'
+import { db, accountAccess, calendar, connectedAccount, googleEvent, icsSource, task, taskConnection, userCalendarSetting } from '@kairo/db'
+import { applyGoogleSnapshot, applyIcsSnapshot, applyTaskSync, clearPendingFields, enqueueJob, finishJob, leaseJobs, pushPendingPatch, reconcileProjection, reconcileTaskBlock, syncTaskBlocks } from '@kairo/core'
+import { createTodoistProvider, fetchIcs, GoogleCalendarClient, parseIcs, refreshGoogleToken, syncGoogleEvents, TODOIST_SCOPE, type TaskProvider, type TodoistOAuthToken } from '@kairo/integrations'
 import { decryptJson, encryptJson, googleCredentials, todoistCredentials } from './credentials'
 
 type StoredGoogle = { accessToken: string; refreshToken: string; expiresAt: number }
-type StoredTodoist = { accessToken: string; refreshToken?: string; expiresAt: number }
-const todoistRefreshes = new Map<string, Promise<StoredTodoist>>()
+type StoredTaskTokens = { accessToken: string; refreshToken?: string; expiresAt: number }
+const taskRefreshes = new Map<string, Promise<StoredTaskTokens>>()
+export const taskProviders: Record<string, TaskProvider> = { todoist: createTodoistProvider({ oauth: todoistCredentials }) }
+
+export function taskProviderFor(connection: { provider: string }) {
+  const provider = taskProviders[connection.provider]
+  if (!provider) throw new Error(`Unknown task provider: ${connection.provider}`)
+  return provider
+}
+
+export const connectionCanWrite = (connection: { provider: string; scope: string | null; status: string }) =>
+  connection.status !== 'reconnect' && (taskProviders[connection.provider]?.canWrite?.(connection.scope) ?? true)
 
 export async function clientForCalendar(calendarId: string, userId?: string) {
   const [row] = await db.select({ cal: calendar, account: connectedAccount, access: accountAccess })
@@ -96,97 +106,157 @@ export async function saveTodoistConnection(userId: string, providerSubject: str
   if (existing?.providerSubject && existing.providerSubject !== providerSubject)
     throw new Error('This workspace already has Todoist tasks from a different account. Reconnect the original account to preserve scheduled blocks.')
   const credentials = encryptJson({ accessToken: tokens.access_token, refreshToken: tokens.refresh_token,
-    expiresAt: Date.now() + tokens.expires_in * 1000 } satisfies StoredTodoist)
+    expiresAt: Date.now() + tokens.expires_in * 1000 } satisfies StoredTaskTokens)
+  // Todoist may omit scope from the token response; we only ever request TODOIST_SCOPE.
+  const scope = tokens.scope || TODOIST_SCOPE
   if (existing) {
-    const [connection] = await db.update(taskConnection).set({ providerSubject, encryptedCredentials: credentials,
+    const [connection] = await db.update(taskConnection).set({ providerSubject, encryptedCredentials: credentials, scope,
       status: 'connected', lastError: null, updatedAt: new Date() }).where(eq(taskConnection.id, existing.id)).returning()
     return connection
   }
-  const [connection] = await db.insert(taskConnection).values({ ownerUserId: userId, providerSubject,
-    encryptedCredentials: credentials, status: 'connected' }).returning()
+  const [connection] = await db.insert(taskConnection).values({ ownerUserId: userId, provider: 'todoist', providerSubject,
+    encryptedCredentials: credentials, scope, status: 'connected' }).returning()
   return connection
 }
 
-async function todoistAccessToken(connectionId: string, force = false): Promise<string> {
+// Task provider credentials are { accessToken, refreshToken?, expiresAt }; refreshing goes through the provider.
+async function taskAccessToken(connectionId: string, provider: TaskProvider, force = false): Promise<string> {
+  const label = provider.label ?? provider.id
   const [connection] = await db.select().from(taskConnection).where(eq(taskConnection.id, connectionId))
-  if (!connection?.encryptedCredentials) throw new Error('Todoist is not connected')
-  if (connection.status === 'reconnect') throw new Error('Reconnect Todoist to resume sync')
+  if (!connection?.encryptedCredentials) throw new Error(`${label} is not connected`)
+  if (connection.status === 'reconnect') throw new Error(`Reconnect ${label} to resume sync`)
   const encryptedCredentials = connection.encryptedCredentials
-  const stored = decryptJson<StoredTodoist>(encryptedCredentials)
+  const stored = decryptJson<StoredTaskTokens>(encryptedCredentials)
   if (!stored.accessToken || !Number.isFinite(stored.expiresAt)) {
-    await db.update(taskConnection).set({ status: 'reconnect', lastError: 'Reconnect Todoist to replace the old API token', updatedAt: new Date() })
+    await db.update(taskConnection).set({ status: 'reconnect', lastError: `Reconnect ${label} to replace the old API token`, updatedAt: new Date() })
       .where(eq(taskConnection.id, connectionId))
-    throw new Error('Reconnect Todoist to replace the old API token')
+    throw new Error(`Reconnect ${label} to replace the old API token`)
   }
   if (!force && stored.expiresAt > Date.now() + 60_000) return stored.accessToken
-  if (!stored.refreshToken) {
+  if (!stored.refreshToken || !provider.refreshToken) {
     if (!force && stored.expiresAt > Date.now()) return stored.accessToken
-    await db.update(taskConnection).set({ status: 'reconnect', lastError: 'Todoist access expired; reconnect your account', updatedAt: new Date() })
+    await db.update(taskConnection).set({ status: 'reconnect', lastError: `${label} access expired; reconnect your account`, updatedAt: new Date() })
       .where(eq(taskConnection.id, connectionId))
-    throw new Error('Todoist access expired; reconnect your account')
+    throw new Error(`${label} access expired; reconnect your account`)
   }
-  const inProgress = todoistRefreshes.get(connectionId)
+  const inProgress = taskRefreshes.get(connectionId)
   if (inProgress) return (await inProgress).accessToken
-  const refresh = (async (): Promise<StoredTodoist> => {
+  const refresh = (async (): Promise<StoredTaskTokens> => {
     try {
-      const tokens = await refreshTodoistToken(todoistCredentials(), stored.refreshToken!)
+      const tokens = await provider.refreshToken!(stored.refreshToken!)
       const [latest] = await db.select().from(taskConnection).where(eq(taskConnection.id, connectionId))
       if (latest?.encryptedCredentials !== encryptedCredentials && latest?.encryptedCredentials)
-        return decryptJson<StoredTodoist>(latest.encryptedCredentials)
-      if (!tokens.refresh_token) {
+        return decryptJson<StoredTaskTokens>(latest.encryptedCredentials)
+      if (!tokens.refreshToken) {
         await db.update(taskConnection).set({ status: 'reconnect',
-          lastError: 'Todoist did not return the rotated refresh token. Reconnect to avoid token replay.', updatedAt: new Date() })
+          lastError: `${label} did not return the rotated refresh token. Reconnect to avoid token replay.`, updatedAt: new Date() })
           .where(eq(taskConnection.id, connectionId))
-        throw new Error('Todoist refresh token could not be recovered; reconnect your account')
+        throw new Error(`${label} refresh token could not be recovered; reconnect your account`)
       }
-      const next: StoredTodoist = { accessToken: tokens.access_token, refreshToken: tokens.refresh_token,
-        expiresAt: Date.now() + tokens.expires_in * 1000 }
+      const next: StoredTaskTokens = { accessToken: tokens.accessToken, refreshToken: tokens.refreshToken, expiresAt: Date.now() + tokens.expiresIn * 1000 }
       const updated = await db.update(taskConnection).set({ encryptedCredentials: encryptJson(next), status: 'connected',
-        lastError: null, updatedAt: new Date() }).where(and(eq(taskConnection.id, connectionId),
+        lastError: null, updatedAt: new Date(), ...(tokens.scope ? { scope: tokens.scope } : {}) }).where(and(eq(taskConnection.id, connectionId),
         eq(taskConnection.encryptedCredentials, encryptedCredentials))).returning()
       if (!updated.length) {
         const [newer] = await db.select().from(taskConnection).where(eq(taskConnection.id, connectionId))
-        if (newer?.encryptedCredentials) return decryptJson<StoredTodoist>(newer.encryptedCredentials)
-        throw new Error('Todoist connection disappeared during refresh')
+        if (newer?.encryptedCredentials) return decryptJson<StoredTaskTokens>(newer.encryptedCredentials)
+        throw new Error(`${label} connection disappeared during refresh`)
       }
       return next
     } catch (error) {
-      if (error instanceof TodoistApiError && (error.status === 400 || error.status === 401) &&
-          /invalid_grant|invalid_token|Unauthorized/i.test(error.message)) {
-        await db.update(taskConnection).set({ status: 'reconnect', lastError: 'Todoist authorization expired; reconnect your account', updatedAt: new Date() })
+      if (['invalid-grant', 'unauthorized'].includes(provider.classifyError?.(error) ?? 'transient')) {
+        await db.update(taskConnection).set({ status: 'reconnect', lastError: `${label} authorization expired; reconnect your account`, updatedAt: new Date() })
           .where(and(eq(taskConnection.id, connectionId), eq(taskConnection.encryptedCredentials, encryptedCredentials)))
       }
       throw error
     }
   })()
-  todoistRefreshes.set(connectionId, refresh)
-  try { return (await refresh).accessToken } finally { todoistRefreshes.delete(connectionId) }
+  taskRefreshes.set(connectionId, refresh)
+  try { return (await refresh).accessToken } finally { taskRefreshes.delete(connectionId) }
 }
 
-export async function syncTodoistConnection(connectionId: string) {
+// Runs a provider call with a fresh token, refreshing once when the provider says the token was rejected.
+async function withTaskToken<T>(connectionId: string, provider: TaskProvider, run: (token: string) => Promise<T>) {
+  const unauthorized = (error: unknown) => provider.classifyError?.(error) === 'unauthorized'
+  try { return await run(await taskAccessToken(connectionId, provider)) }
+  catch (error) {
+    if (!unauthorized(error)) throw error
+    const token = await taskAccessToken(connectionId, provider, true)
+    try { return await run(token) }
+    catch (retryError) {
+      if (unauthorized(retryError))
+        await db.update(taskConnection).set({ status: 'reconnect', lastError: `${provider.label ?? provider.id} rejected the renewed token; reconnect your account`, updatedAt: new Date() })
+          .where(eq(taskConnection.id, connectionId))
+      throw retryError
+    }
+  }
+}
+
+// Timed tasks are mirrored on the user's default calendar, else the first writable one.
+export async function taskMirrorCalendarId(userId: string) {
+  const rows = await db.select({ cal: calendar, setting: userCalendarSetting }).from(calendar)
+    .innerJoin(accountAccess, eq(calendar.connectedAccountId, accountAccess.connectedAccountId))
+    .leftJoin(userCalendarSetting, and(eq(userCalendarSetting.calendarId, calendar.id), eq(userCalendarSetting.userId, userId)))
+    .where(eq(accountAccess.userId, userId))
+  const writable = rows.filter((row) => row.cal.accessRole === 'owner' || row.cal.accessRole === 'writer')
+  return (writable.find((row) => row.setting?.isDefault) ?? writable[0])?.cal.id ?? null
+}
+
+export async function syncTaskConnection(connectionId: string) {
   const [connection] = await db.select().from(taskConnection).where(eq(taskConnection.id, connectionId))
   if (!connection) return
   try {
-    let token = await todoistAccessToken(connectionId)
-    let result
-    try { result = await syncTodoist(token, connection.syncToken) }
-    catch (error) {
-      if (!(error instanceof TodoistApiError && error.status === 401)) throw error
-      token = await todoistAccessToken(connectionId, true)
-      try { result = await syncTodoist(token, connection.syncToken) }
-      catch (retryError) {
-        if (retryError instanceof TodoistApiError && retryError.status === 401)
-          await db.update(taskConnection).set({ status: 'reconnect', lastError: 'Todoist rejected the renewed token; reconnect your account', updatedAt: new Date() })
-            .where(eq(taskConnection.id, connectionId))
-        throw retryError
-      }
-    }
-    await applyTodoistSync(db, connection.id, result)
+    const provider = taskProviderFor(connection)
+    const result = await withTaskToken(connectionId, provider, (token) => provider.sync(token, connection.syncToken))
+    const touched = await applyTaskSync(db, connection.id, result)
+    await syncTaskBlocks(db, { connectionId: connection.id }, await taskMirrorCalendarId(connection.ownerUserId), touched)
   } catch (error) {
     const [current] = await db.select().from(taskConnection).where(eq(taskConnection.id, connectionId))
     if (current?.status !== 'reconnect') await db.update(taskConnection).set({ status: 'error', lastError: String(error), updatedAt: new Date() }).where(eq(taskConnection.id, connection.id))
     throw error
   }
+}
+export const syncTodoistConnection = syncTaskConnection
+
+// Drops pending edits that can never be sent and forces a full resync so the provider's values show again.
+async function discardPending(connectionId: string, tasks: { id: string; pendingPatch: string | null }[], lastError?: string) {
+  for (const item of tasks) if (item.pendingPatch) clearPendingFields(db, item.id, JSON.parse(item.pendingPatch))
+  await db.update(taskConnection).set({ syncToken: null }).where(eq(taskConnection.id, connectionId))
+  await syncTaskConnection(connectionId).catch((error) => console.error('Task resync failed', error))
+  if (lastError) await db.update(taskConnection).set({ lastError, updatedAt: new Date() }).where(eq(taskConnection.id, connectionId))
+}
+
+// After a (re)connect: push parked edits if we can write now, otherwise give them up.
+export async function resumePendingPushes(connectionId: string) {
+  const [connection] = await db.select().from(taskConnection).where(eq(taskConnection.id, connectionId))
+  if (!connection) return
+  const pending = await db.select({ id: task.id, pendingPatch: task.pendingPatch }).from(task).where(and(eq(task.connectionId, connectionId), isNotNull(task.pendingPatch)))
+  if (!pending.length) return
+  if (!connectionCanWrite(connection)) return discardPending(connectionId, pending, `Reconnect ${taskProviderFor(connection).label ?? connection.provider} to edit tasks`)
+  for (const item of pending) await enqueueJob(db, 'task-push', item.id)
+}
+
+export async function pushTask(taskId: string) {
+  const [row] = await db.select({ item: task, connection: taskConnection }).from(task).innerJoin(taskConnection, eq(task.connectionId, taskConnection.id)).where(eq(task.id, taskId))
+  if (!row?.item.pendingPatch) return
+  const { item, connection } = row
+  const provider = taskProviderFor(connection)
+  const label = provider.label ?? provider.id
+  // Waiting on a reconnect: park (resumePendingPushes re-enqueues). Sync can't run either, so nothing is masked meanwhile.
+  if (connection.status === 'reconnect') return
+  // Connected without write access: these edits can never be sent.
+  if (!connectionCanWrite(connection)) return discardPending(connection.id, [item], `Reconnect ${label} to edit tasks`)
+  const context = { current: item.dueDate || item.dueDateTime ? { timed: !!item.dueDateTime, recurring: item.dueRecurring, string: item.dueString, timeZone: item.dueTimeZone } : null, cursor: connection.syncToken }
+  const result = await pushPendingPatch(db, taskId, (current, patch) => withTaskToken(connection.id, provider, (token) => provider.update(token, current.todoistId, patch, context)),
+    (error) => ['rejected', 'forbidden'].includes(provider.classifyError?.(error) ?? 'transient'))
+  if (result.status === 'rejected') {
+    const forbidden = provider.classifyError?.(result.error) === 'forbidden'
+    if (forbidden) await db.update(taskConnection).set({ scope: null }).where(eq(taskConnection.id, connection.id))
+    const message = forbidden ? `Reconnect ${label} to edit tasks` : result.error instanceof Error ? result.error.message : String(result.error)
+    return discardPending(connection.id, [], `Couldn't update "${item.content}": ${message}`)
+  }
+  // Recurring tasks change shape on the provider side (closing advances the due date), so read it back now.
+  if (result.status === 'pushed' && item.dueRecurring) await syncTaskConnection(connection.id).catch((error) => console.error('Task resync failed', error))
 }
 
 export async function processJobs() {
@@ -195,8 +265,9 @@ export async function processJobs() {
     try {
       if (job.kind === 'projection') await reconcileProjection(db, job.targetId, async (id) => (await clientForCalendar(id)).client)
       if (job.kind === 'task-block') await reconcileTaskBlock(db, job.targetId, async (id) => (await clientForCalendar(id)).client)
-      await finishJob(db, job.id)
-    } catch (error) { await finishJob(db, job.id, error) }
+      if (job.kind === 'task-push') await pushTask(job.targetId)
+      await finishJob(db, job)
+    } catch (error) { await finishJob(db, job, error) }
   }
 }
 

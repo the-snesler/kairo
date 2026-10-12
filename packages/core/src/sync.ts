@@ -1,7 +1,7 @@
-import { and, eq, isNull, lte, or } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, isNull, lte, ne, or, sql } from 'drizzle-orm';
 import { calendar, eventDecision, eventProjection, externalEvent, googleEvent, icsSource,
-  syncJob, task, taskBlock, taskConnection } from '@kairo/db/schema';
-import { GoogleApiError, type GoogleCalendarClient, type GoogleEvent, type IcsOccurrence, type TodoistSync } from '@kairo/integrations';
+  syncJob, task, taskBlock, taskConnection, taskEstimate } from '@kairo/db/schema';
+import { GoogleApiError, type GoogleCalendarClient, type GoogleEvent, type IcsOccurrence, type NormalizedTask, type TaskPatch, type TaskSyncResult } from '@kairo/integrations';
 
 type Db = any;
 const date = (value?: string) => value ? new Date(value) : null;
@@ -99,27 +99,149 @@ export async function applyIcsSnapshot(db: Db, sourceId: string, occurrences: Ic
   });
 }
 
-export async function applyTodoistSync(db: Db, connectionId: string, result: TodoistSync) {
-  db.transaction((tx: Db) => {
-    const now = new Date();
-    if (result.full_sync) tx.update(task).set({ deleted: true, updatedAt: now }).where(eq(task.connectionId, connectionId)).run();
-    for (const item of result.items ?? []) {
-      const values = { connectionId, todoistId: item.id, content: item.content ?? '', description: item.description ?? null,
-        projectId: item.project_id ?? null, priority: item.priority ?? 1, dueDate: item.due?.date ?? null,
-        dueDateTime: date(item.due?.datetime), dueTimeZone: item.due?.timezone ?? null,
-        durationMinutes: item.duration ? item.duration.amount * (item.duration.unit === 'day' ? 1440 : 1) : null,
-        completed: !!item.checked, deleted: !!item.is_deleted, providerUpdatedAt: date(item.updated_at), updatedAt: now };
-      tx.insert(task).values(values).onConflictDoUpdate({ target: [task.connectionId, task.todoistId], set: values }).run();
+// Columns owned by each TaskPatch field: while the field is pending, provider syncs must not overwrite them.
+const pendingColumns: Record<keyof TaskPatch, string[]> = { title: ['content'],
+  due: ['dueDate', 'dueDateTime', 'dueTimeZone', 'dueString', 'dueRecurring'], completed: ['completed', 'completedAt'] };
+
+export function normalizedTaskValues(item: NormalizedTask) {
+  return { content: item.title, description: item.description, projectId: item.projectId, priority: item.priority,
+    dueDate: item.due && 'date' in item.due ? item.due.date : null, dueDateTime: item.due && 'dateTime' in item.due ? new Date(item.due.dateTime) : null,
+    dueTimeZone: item.due?.timeZone ?? null, dueString: item.due?.string ?? null, dueRecurring: !!item.due?.recurring,
+    durationMinutes: item.durationMinutes, completed: item.completed, completedAt: item.completedAt ?? null, deleted: item.deleted,
+    providerUpdatedAt: item.updatedAt };
+}
+
+// Provider-agnostic apply. Returns ids of tasks whose title changed or that are new (their mirrors need a refresh).
+export async function applyTaskSync(db: Db, connectionId: string, result: TaskSyncResult): Promise<string[]> {
+  return db.transaction((tx: Db) => {
+    const now = new Date(); const touched: string[] = [];
+    // Incremental syncs only carry changed projects; fall back to names already stored for that project.
+    const known = new Map<string, string>(tx.select({ projectId: task.projectId, projectName: task.projectName }).from(task)
+      .where(and(eq(task.connectionId, connectionId), isNotNull(task.projectId), isNotNull(task.projectName))).all().map((row: { projectId: string; projectName: string }) => [row.projectId, row.projectName]));
+    for (const project of result.projects ?? []) known.set(project.id, project.name);
+    if (result.full) tx.update(task).set({ deleted: true, updatedAt: now }).where(eq(task.connectionId, connectionId)).run();
+    for (const item of result.tasks) {
+      const existing = tx.select().from(task).where(and(eq(task.connectionId, connectionId), eq(task.todoistId, item.externalId))).get();
+      const values: Record<string, unknown> = { ...normalizedTaskValues(item), updatedAt: now,
+        projectName: item.projectName ?? (item.projectId ? known.get(item.projectId) ?? null : null) };
+      if (item.completed && !item.completedAt) values.completedAt = existing?.completedAt ?? now;
+      const pending = existing?.pendingPatch ? JSON.parse(existing.pendingPatch) as TaskPatch : {};
+      for (const key of Object.keys(pending) as (keyof TaskPatch)[]) for (const column of pendingColumns[key] ?? []) delete values[column];
+      if (existing) {
+        tx.update(task).set(values).where(eq(task.id, existing.id)).run();
+        if (values.content !== undefined && values.content !== existing.content) touched.push(existing.id);
+      } else touched.push(tx.insert(task).values({ ...values, connectionId, todoistId: item.externalId }).returning().get().id);
     }
-    tx.update(taskConnection).set({ syncToken: result.sync_token, status: 'ready', lastError: null,
+    for (const project of result.projects ?? [])
+      tx.update(task).set({ projectName: project.name }).where(and(eq(task.connectionId, connectionId), eq(task.projectId, project.id))).run();
+    tx.update(taskConnection).set({ syncToken: result.cursor, status: 'ready', lastError: null,
       lastSyncedAt: now, updatedAt: now }).where(eq(taskConnection.id, connectionId)).run();
+    return touched;
   });
 }
 
+const sameValue = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+
+// Removes sent fields from the pending patch, keeping any whose value changed (a newer edit) since they were sent.
+export function clearPendingFields(db: Db, taskId: string, sent: TaskPatch): TaskPatch {
+  return db.transaction((tx: Db) => {
+    const row = tx.select({ pendingPatch: task.pendingPatch }).from(task).where(eq(task.id, taskId)).get();
+    const pending: TaskPatch = row?.pendingPatch ? JSON.parse(row.pendingPatch) : {};
+    for (const key of Object.keys(sent) as (keyof TaskPatch)[]) if (key in pending && sameValue(pending[key], sent[key])) delete pending[key];
+    tx.update(task).set({ pendingPatch: Object.keys(pending).length ? JSON.stringify(pending) : null }).where(eq(task.id, taskId)).run();
+    return pending;
+  });
+}
+
+export type PushResult = { status: 'idle' } | { status: 'pushed'; remaining: TaskPatch } | { status: 'rejected'; error: unknown; sent: TaskPatch };
+
+// Pushes the pending patch. Permanent failures drop only the fields that were sent.
+export async function pushPendingPatch(db: Db, taskId: string, push: (item: typeof task.$inferSelect, patch: TaskPatch) => Promise<void>,
+  isPermanent: (error: unknown) => boolean = () => false): Promise<PushResult> {
+  const [item] = await db.select().from(task).where(eq(task.id, taskId));
+  if (!item?.pendingPatch) return { status: 'idle' };
+  const sent: TaskPatch = JSON.parse(item.pendingPatch);
+  try { await push(item, sent); }
+  catch (error) {
+    if (!isPermanent(error)) throw error;
+    clearPendingFields(db, taskId, sent);
+    return { status: 'rejected', error, sent };
+  }
+  return { status: 'pushed', remaining: clearPendingFields(db, taskId, sent) };
+}
+
+// Merges a new edit into the pending patch. Undoing a completion that hasn't been sent just cancels it.
+export function mergePendingPatch(pending: TaskPatch, next: TaskPatch, inFlight: boolean): TaskPatch {
+  const merged = { ...pending, ...next };
+  if (next.completed === false && pending.completed === true && !inFlight) delete merged.completed;
+  return merged;
+}
+
+export const DEFAULT_TASK_MINUTES = 30;
+export type DurationSource = 'user' | 'provider' | 'ai' | 'default';
+
+export function effectiveTaskDuration(item: { durationOverrideMinutes: number | null; durationMinutes: number | null }, estimate?: number | null): { minutes: number; source: DurationSource } {
+  if (item.durationOverrideMinutes != null) return { minutes: item.durationOverrideMinutes, source: 'user' };
+  if (item.durationMinutes != null) return { minutes: item.durationMinutes, source: 'provider' };
+  if (estimate != null) return { minutes: estimate, source: 'ai' };
+  return { minutes: DEFAULT_TASK_MINUTES, source: 'default' };
+}
+
+type MirrorTask = { id: string; dueDateTime: Date | null; completed: boolean; deleted: boolean; durationOverrideMinutes: number | null; durationMinutes: number | null };
+type MirrorBlock = { id: string; calendarId: string; startAt: Date; endAt: Date; syncState: string };
+
+// A timed open task is mirrored by exactly one block on the mirror calendar; every other block goes away.
+export function planTaskBlock(item: MirrorTask, estimate: number | null | undefined, blocks: MirrorBlock[], calendarId: string | null) {
+  const live = blocks.filter(block => block.syncState !== 'deleting');
+  const start = calendarId && item.dueDateTime && !item.completed && !item.deleted ? item.dueDateTime : null;
+  if (!start) return { block: null, remove: live.map(block => block.id) };
+  const end = new Date(start.getTime() + effectiveTaskDuration(item, estimate).minutes * 60_000);
+  const keep = live.find(block => block.calendarId === calendarId);
+  return { block: { id: keep?.id ?? null, calendarId: calendarId!, startAt: start, endAt: end,
+    changed: !keep || keep.startAt.getTime() !== start.getTime() || keep.endAt.getTime() !== end.getTime() },
+    remove: live.filter(block => block !== keep).map(block => block.id) };
+}
+
+// Brings task blocks in line with their tasks and enqueues Google reconciles. `touched` forces a refresh (e.g. title change).
+export async function syncTaskBlocks(db: Db, scope: { connectionId: string } | { taskIds: string[] }, calendarId: string | null, touched: Iterable<string> = []) {
+  const forced = new Set(touched);
+  const byConnection = 'connectionId' in scope;
+  if (!byConnection && !scope.taskIds.length) return [];
+  const tasks = db.select().from(task).where(byConnection ? eq(task.connectionId, scope.connectionId) : inArray(task.id, scope.taskIds)).all();
+  const ids: string[] = tasks.map((item: { id: string }) => item.id);
+  const blocks = (byConnection ? db.select({ block: taskBlock }).from(taskBlock).innerJoin(task, eq(taskBlock.taskId, task.id)).where(eq(task.connectionId, scope.connectionId)).all().map((row: { block: MirrorBlock }) => row.block)
+    : db.select().from(taskBlock).where(inArray(taskBlock.taskId, ids)).all()) as (MirrorBlock & { taskId: string })[];
+  const estimates = (byConnection ? db.select({ estimate: taskEstimate }).from(taskEstimate).innerJoin(task, eq(taskEstimate.taskId, task.id)).where(eq(task.connectionId, scope.connectionId)).all().map((row: { estimate: unknown }) => row.estimate)
+    : db.select().from(taskEstimate).where(inArray(taskEstimate.taskId, ids)).all()) as { taskId: string; minutes: number }[];
+  const estimateBy = new Map(estimates.map(item => [item.taskId, item.minutes]));
+  const blocksBy = new Map<string, MirrorBlock[]>();
+  for (const block of blocks) blocksBy.set(block.taskId, [...blocksBy.get(block.taskId) ?? [], block]);
+  const jobs: string[] = [];
+  db.transaction((tx: Db) => {
+    const now = new Date();
+    for (const item of tasks) {
+      const plan = planTaskBlock(item, estimateBy.get(item.id), blocksBy.get(item.id) ?? [], calendarId);
+      for (const id of plan.remove) { tx.update(taskBlock).set({ syncState: 'deleting', updatedAt: now }).where(eq(taskBlock.id, id)).run(); jobs.push(id); }
+      const next = plan.block;
+      if (!next || (!next.changed && !forced.has(item.id))) continue;
+      if (next.id) { tx.update(taskBlock).set({ startAt: next.startAt, endAt: next.endAt, syncState: 'pending', updatedAt: now }).where(eq(taskBlock.id, next.id)).run(); jobs.push(next.id); }
+      else jobs.push(tx.insert(taskBlock).values({ taskId: item.id, calendarId: next.calendarId, startAt: next.startAt, endAt: next.endAt }).returning().get().id);
+    }
+  });
+  for (const id of jobs) await enqueueJob(db, 'task-block', id);
+  return jobs;
+}
+
+// A running job keeps its lease (no parallel run); the bumped updatedAt tells finishJob to run it again.
 export async function enqueueJob(db: Db, kind: string, targetId: string, nextRunAt = new Date()) {
-  const jobKey = `${kind}:${targetId}`;
+  const jobKey = `${kind}:${targetId}`, now = new Date();
   await db.insert(syncJob).values({ jobKey, kind, targetId, nextRunAt }).onConflictDoUpdate({ target: syncJob.jobKey,
-    set: { nextRunAt, leaseUntil: null, updatedAt: new Date() } });
+    set: { nextRunAt, updatedAt: now, leaseUntil: sql`CASE WHEN ${syncJob.leaseUntil} > ${now.getTime()} THEN ${syncJob.leaseUntil} ELSE NULL END` } });
+}
+
+export async function isJobRunning(db: Db, kind: string, targetId: string, now = new Date()) {
+  const [job] = await db.select({ leaseUntil: syncJob.leaseUntil }).from(syncJob).where(eq(syncJob.jobKey, `${kind}:${targetId}`));
+  return !!job?.leaseUntil && job.leaseUntil > now;
 }
 
 export async function leaseJobs(db: Db, limit = 10, now = new Date()) {
@@ -136,14 +258,21 @@ export async function leaseJobs(db: Db, limit = 10, now = new Date()) {
   });
 }
 
-export async function finishJob(db: Db, id: string, error?: unknown) {
-  if (!error) { await db.delete(syncJob).where(eq(syncJob.id, id)); return; }
-  const [job] = await db.select().from(syncJob).where(eq(syncJob.id, id));
-  if (!job) return;
-  const attempts = job.attempts + 1;
+type LeasedJob = { id: string; updatedAt: Date };
+
+// A job re-enqueued while it ran (updatedAt moved past the lease) is released to run again instead of finished or backed off.
+export async function finishJob(db: Db, job: LeasedJob, error?: unknown) {
+  const [current] = await db.select().from(syncJob).where(eq(syncJob.id, job.id));
+  if (!current) return;
+  if (current.updatedAt.getTime() !== job.updatedAt.getTime()) {
+    await db.update(syncJob).set({ leaseUntil: null }).where(eq(syncJob.id, job.id));
+    return;
+  }
+  if (!error) { await db.delete(syncJob).where(and(eq(syncJob.id, job.id), eq(syncJob.updatedAt, job.updatedAt))); return; }
+  const attempts = current.attempts + 1;
   const delay = Math.min(6 * 60 * 60_000, 30_000 * 2 ** Math.min(10, attempts - 1));
   await db.update(syncJob).set({ attempts, leaseUntil: null, lastError: String(error),
-    nextRunAt: new Date(Date.now() + delay), updatedAt: new Date() }).where(eq(syncJob.id, id));
+    nextRunAt: new Date(Date.now() + delay), updatedAt: new Date() }).where(eq(syncJob.id, job.id));
 }
 
 export async function runDueJobs(db: Db, handlers: Record<string, (targetId: string) => Promise<void>>, limit = 10) {
@@ -153,8 +282,8 @@ export async function runDueJobs(db: Db, handlers: Record<string, (targetId: str
       const handler = handlers[job.kind];
       if (!handler) throw new Error(`Unknown sync job kind: ${job.kind}`);
       await handler(job.targetId);
-      await finishJob(db, job.id);
-    } catch (error) { await finishJob(db, job.id, error); }
+      await finishJob(db, job);
+    } catch (error) { await finishJob(db, job, error); }
   }
   return jobs.length;
 }
@@ -245,30 +374,30 @@ export async function reconcileTaskBlock(db: Db, blockId: string,
   if (!block) return;
   const [cal] = await db.select().from(calendar).where(eq(calendar.id, block.calendarId));
   const [linkedTask] = await db.select().from(task).where(eq(task.id, block.taskId));
-  if (!cal || !linkedTask) return;
-  const client = await clientForCalendar(cal.id);
-  const body: Partial<GoogleEvent> = { summary: linkedTask.content, start: { dateTime: block.startAt.toISOString() },
-    end: { dateTime: block.endAt.toISOString() }, extendedProperties: { private: { kairoTaskBlockId: block.id } } };
-  try {
-    let event: GoogleEvent | undefined;
-    if (block.googleEventId) {
-      const current = await client.getEvent(cal.googleCalendarId, block.googleEventId);
-      if (block.lastAppliedEtag && current.etag !== block.lastAppliedEtag) {
-        await db.update(taskBlock).set({ syncState: 'conflict', lastError: 'Google event changed remotely' }).where(eq(taskBlock.id, block.id));
-        return;
+  const gone = (error: unknown) => error instanceof GoogleApiError && (error.status === 404 || error.status === 410);
+  if (block.syncState === 'deleting' || !linkedTask) {
+    if (cal) {
+      const client = await clientForCalendar(cal.id);
+      const eventId = block.googleEventId ?? (await client.findByPrivateProperty(cal.googleCalendarId, 'kairoTaskBlockId', block.id))?.id;
+      if (eventId) {
+        try { await client.deleteEvent(cal.googleCalendarId, eventId); } catch (error) { if (!gone(error)) throw error; }
+        await db.delete(googleEvent).where(and(eq(googleEvent.calendarId, cal.id), eq(googleEvent.googleEventId, eventId)));
       }
-      event = await client.updateEvent(cal.googleCalendarId, current.id, body, current.etag);
-    } else {
-      const found = await client.findByPrivateProperty(cal.googleCalendarId, 'kairoTaskBlockId', block.id);
-      event = found ?? await client.createEvent(cal.googleCalendarId, body);
     }
-    await db.update(taskBlock).set({ googleEventId: event.id, lastAppliedEtag: event.etag ?? null,
-      syncState: 'ready', lastError: null, updatedAt: new Date() }).where(eq(taskBlock.id, block.id));
-  } catch (error) {
-    if (error instanceof GoogleApiError && (error.status === 404 || error.status === 412)) {
-      await db.update(taskBlock).set({ syncState: 'conflict', lastError: String(error), updatedAt: new Date() }).where(eq(taskBlock.id, block.id));
-      return;
-    }
-    throw error;
+    await db.delete(taskBlock).where(eq(taskBlock.id, block.id));
+    return;
   }
+  if (!cal) return;
+  const client = await clientForCalendar(cal.id);
+  // The mirror is derived from the task, so Kairo's version always wins over remote edits.
+  const body: Partial<GoogleEvent> = { summary: linkedTask.content, status: 'confirmed', start: { dateTime: block.startAt.toISOString() },
+    end: { dateTime: block.endAt.toISOString() }, extendedProperties: { private: { kairoTaskBlockId: block.id } } };
+  const update = async (id: string) => { try { return await client.updateEvent(cal.googleCalendarId, id, body); } catch (error) { if (gone(error)) return undefined; throw error; } };
+  let event = block.googleEventId ? await update(block.googleEventId) : undefined;
+  if (!event) {
+    const found = await client.findByPrivateProperty(cal.googleCalendarId, 'kairoTaskBlockId', block.id);
+    event = (found && await update(found.id)) || await client.createEvent(cal.googleCalendarId, body);
+  }
+  await db.update(taskBlock).set({ googleEventId: event.id, lastAppliedEtag: event.etag ?? null, lastError: null, updatedAt: new Date() }).where(eq(taskBlock.id, block.id));
+  await db.update(taskBlock).set({ syncState: 'ready' }).where(and(eq(taskBlock.id, block.id), ne(taskBlock.syncState, 'deleting')));
 }

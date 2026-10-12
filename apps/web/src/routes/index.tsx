@@ -9,7 +9,8 @@ import IconX from '~icons/tabler/x'
 import { CalendarWorkspace, type CalendarEvent } from '../features/calendar/CalendarWorkspace'
 import { Sidebar } from '../features/shell/Sidebar'
 import { ProjectionConflicts } from '../features/shell/ProjectionConflicts'
-import { addIcsFeed, decideExternalEvent, deleteGoogleEvent, deleteIcsFeed, deleteTaskBlock, getCalendarSnapshot, getViewer, resolveProjectionConflict, saveGoogleEvent, saveTaskBlock, setCalendarRole, setCalendarVisibility, syncNow } from '../server/calendar.functions'
+import { TaskPopover, type TaskChange } from '../features/tasks/TaskPopover'
+import { addIcsFeed, decideExternalEvent, deleteGoogleEvent, deleteIcsFeed, getCalendarSnapshot, getViewer, resolveProjectionConflict, saveGoogleEvent, setCalendarRole, setCalendarVisibility, syncNow, updateTask } from '../server/calendar.functions'
 import '../features/shell/app.css'
 
 export const Route = createFileRoute('/')({ loader: () => getViewer(), component: Home })
@@ -60,6 +61,8 @@ function Dashboard({ user }: { user: { id: string; name: string; email: string }
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [toast, setToast] = useState('')
+  const [undo, setUndo] = useState<{ id: number, label: string, action: () => void } | null>(null)
+  const [openTask, setOpenTask] = useState<{ id: string, anchor: HTMLElement } | null>(null)
   const [conflictBusy, setConflictBusy] = useState<string | null>(null)
   const rangeRef = useRef({ start: addDays(startOfDay(new Date()), -20), end: addDays(startOfDay(new Date()), 42) })
   const requestRef = useRef(0)
@@ -108,14 +111,16 @@ function Dashboard({ user }: { user: { id: string; name: string; email: string }
   }
 
   async function eventSave(event: CalendarEvent) {
-    if (event.kind === 'taskBlock') {
-      if (!event.taskId || !event.calendarId) throw new Error('Task block is missing its task or calendar')
-      await mutation(() => saveTaskBlock({ data: { id: event.id, taskId: event.taskId!, calendarId: event.calendarId!, start: new Date(event.start).toISOString(), end: new Date(event.end).toISOString() } }))
-    } else {
-      const calendarId = event.calendarId
-      if (!calendarId) throw new Error('Choose a calendar')
-      await mutation(() => saveGoogleEvent({ data: { id: event.id, title: event.title, start: new Date(event.start).toISOString(), end: new Date(event.end).toISOString(), allDay: !!event.allDay, calendarId, eventColor: event.eventColor, description: event.description, location: event.location } }))
-    }
+    const calendarId = event.calendarId
+    if (!calendarId) throw new Error('Choose a calendar')
+    await mutation(() => saveGoogleEvent({ data: { id: event.id, title: event.title, start: new Date(event.start).toISOString(), end: new Date(event.end).toISOString(), allDay: !!event.allDay, calendarId, eventColor: event.eventColor, description: event.description, location: event.location } }))
+  }
+
+  async function taskChange(id: string, patch: TaskChange) {
+    // Completing a recurring task advances its due date, so undo restores the date it had.
+    const previousDue = snapshot?.tasks.find((item) => item.id === id)?.due ?? null
+    await mutation(() => updateTask({ data: { id, ...patch } }))
+    if (patch.completed) setUndo({ id: Date.now(), label: 'Task completed', action: () => { void taskChange(id, { completed: false, due: previousDue }).catch(() => {}) } })
   }
 
   async function eventCreate(event: Omit<CalendarEvent, 'id'>) {
@@ -155,13 +160,16 @@ function Dashboard({ user }: { user: { id: string; name: string; email: string }
 
   const events = useMemo(() => snapshot?.events.filter((event) => !event.calendarId || visibleCalendarIds.has(event.calendarId)) || [], [snapshot, visibleCalendarIds])
   const calendars = snapshot?.calendars || []
+  const openTaskSummary = openTask && snapshot?.tasks.find((item) => item.id === openTask.id)
 
   return <div className="app-layout">
-    <Sidebar selectedDate={selectedDate} visibleDays={visibleDays} calendars={calendars} visibleCalendarIds={visibleCalendarIds} sources={snapshot?.sources || []} tasks={snapshot?.tasks || []} syncBusy={busy} onDateChange={setSelectedDate} onToggleCalendar={toggleCalendar} onAddFeed={() => setFeedDialog(true)} onConnectGoogle={() => { window.location.href = '/api/google/connect' }} onSync={refresh} onSettings={() => setSettingsDialog(true)} />
+    <Sidebar selectedDate={selectedDate} visibleDays={visibleDays} calendars={calendars} visibleCalendarIds={visibleCalendarIds} sources={snapshot?.sources || []} tasks={snapshot?.tasks || []} onTaskOpen={(id, anchor) => setOpenTask({ id, anchor })} onTaskComplete={(id) => { void taskChange(id, { completed: true }).catch(() => {}) }} syncBusy={busy} onDateChange={setSelectedDate} onToggleCalendar={toggleCalendar} onAddFeed={() => setFeedDialog(true)} onConnectGoogle={() => { window.location.href = '/api/google/connect' }} onSync={refresh} onSettings={() => setSettingsDialog(true)} />
     <main className="app-main">
       {Boolean(error || snapshot?.errors.length) && <div className="status-banner"><IconAlertCircle /><span>{error || snapshot?.errors.join(' · ')}</span><button aria-label="Dismiss" onClick={() => setError('')}><IconX /></button></div>}
       {toast && <div className="toast" role="status" onAnimationEnd={() => setToast('')}>{toast}</div>}
-      {!snapshot ? <div className="loading-state">Loading your calendar…</div> : <CalendarWorkspace events={events} calendars={calendars} date={selectedDate} toolbarActions={<><button className="utility-button" aria-label="Add Maybe feed" onClick={() => setFeedDialog(true)}><IconCircleDashed /> <span className="utility-feed-label">Add Maybe feed</span></button><button className="utility-button" aria-label="Settings" onClick={() => setSettingsDialog(true)}>{Boolean(snapshot.conflicts.length) && <span className="utility-conflict-count" aria-label={`${snapshot.conflicts.length} sync conflicts`}>{snapshot.conflicts.length}</span>}{user.name.split(' ').map((part) => part[0]).slice(0, 2).join('').toUpperCase()} <IconChevronDown /></button></>} onDateChange={setSelectedDate} onVisibleDaysChange={visibleDaysChange} onVisibleRangeChange={visibleRange} onEventChange={eventSave} onEventCreate={eventCreate} onEventDelete={(event) => mutation(() => event.kind === 'taskBlock' ? deleteTaskBlock({ data: { id: event.id } }) : deleteGoogleEvent({ data: { id: event.id } }))} onDecisionChange={(event, state, calendarId) => mutation(() => decideExternalEvent({ data: { eventId: event.id, state, calendarId } }))} onTaskDrop={(taskId, start, end) => { const calendarId = calendars.find((item) => item.isDefault)?.id || calendars[0]?.id; if (!calendarId) { setError('Connect a writable calendar to schedule work'); return }; void mutation(() => saveTaskBlock({ data: { taskId, calendarId, start: start.toISOString(), end: end.toISOString() } })) }} />}
+      {undo && <div className="toast toast-undo" role="status" key={undo.id} onAnimationEnd={() => setUndo(null)}>{undo.label}<button onClick={() => { undo.action(); setUndo(null) }}>Undo</button></div>}
+      {openTask && openTaskSummary && <TaskPopover key={openTask.id} task={openTaskSummary} anchor={openTask.anchor} canEdit={snapshot?.connections.todoistCanWrite ?? false} onClose={() => setOpenTask(null)} onChange={(patch) => taskChange(openTask.id, patch)} />}
+      {!snapshot ? <div className="loading-state">Loading your calendar…</div> : <CalendarWorkspace events={events} calendars={calendars} date={selectedDate} toolbarActions={<><button className="utility-button" aria-label="Add Maybe feed" onClick={() => setFeedDialog(true)}><IconCircleDashed /> <span className="utility-feed-label">Add Maybe feed</span></button><button className="utility-button" aria-label="Settings" onClick={() => setSettingsDialog(true)}>{Boolean(snapshot.conflicts.length) && <span className="utility-conflict-count" aria-label={`${snapshot.conflicts.length} sync conflicts`}>{snapshot.conflicts.length}</span>}{user.name.split(' ').map((part) => part[0]).slice(0, 2).join('').toUpperCase()} <IconChevronDown /></button></>} onDateChange={setSelectedDate} onVisibleDaysChange={visibleDaysChange} onVisibleRangeChange={visibleRange} onEventChange={eventSave} onEventCreate={eventCreate} onEventDelete={(event) => mutation(() => deleteGoogleEvent({ data: { id: event.id } }))} onDecisionChange={(event, state, calendarId) => mutation(() => decideExternalEvent({ data: { eventId: event.id, state, calendarId } }))} onTaskChange={taskChange} onTaskOpen={(id, anchor) => setOpenTask({ id, anchor })} />}
     </main>
 
     {feedDialog && <div className="dialog-backdrop" onMouseDown={() => setFeedDialog(false)}><form className="app-dialog" onMouseDown={(event) => event.stopPropagation()} onSubmit={addFeed}><button className="dialog-close" type="button" onClick={() => setFeedDialog(false)} aria-label="Close"><IconX /></button><div className="dialog-kicker"><IconCircleDashed /> MAYBE</div><h2>Add a calendar feed</h2><p>Events from this ICS feed stay undecided until you choose Yes, Maybe, or No.</p><label>Feed name<input value={feedName} onChange={(event) => setFeedName(event.target.value)} placeholder="Community events" required autoFocus /></label><label>ICS URL<input type="url" value={feedUrl} onChange={(event) => setFeedUrl(event.target.value)} placeholder="https://example.com/calendar.ics" required /></label><button className="primary-button" disabled={busy}><IconPlus /> Add feed</button></form></div>}

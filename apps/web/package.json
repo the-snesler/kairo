@@ -7,11 +7,12 @@
     "build": "vite build",
     "start": "node .output/server/index.mjs",
     "worker": "tsx src/worker.ts",
-    "test": "DATABASE_URL=:memory: ENCRYPTION_KEY=test-only-encryption-key-with-at-least-32-chars tsx --test src/server/*.test.ts",
+    "test": "DATABASE_URL=:memory: ENCRYPTION_KEY=test-only-encryption-key-with-at-least-32-chars tsx --test 'src/server/*.test.ts' 'src/features/**/*.test.ts'",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@floating-ui/react": "^0.27.20",
+    "@kairo/ai": "workspace:*",
     "@kairo/core": "workspace:*",
     "@kairo/db": "workspace:*",
     "@kairo/integrations": "workspace:*",
