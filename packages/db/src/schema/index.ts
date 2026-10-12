@@ -187,6 +187,8 @@ export const eventProjection = sqliteTable('event_projection', {
 
 export const taskConnection = sqliteTable('task_connection', {
   id: id(),
+  provider: text('provider').notNull().default('todoist'),
+  scope: text('scope'),
   ownerUserId: text('owner_user_id').notNull().references(() => user.id, { onDelete: 'cascade' }),
   providerSubject: text('provider_subject'),
   encryptedCredentials: text('encrypted_credentials'),
@@ -210,8 +212,15 @@ export const task = sqliteTable('task', {
   dueDate: text('due_date'),
   dueDateTime: timestamp('due_date_time'),
   dueTimeZone: text('due_time_zone'),
+  dueString: text('due_string'),
+  dueRecurring: integer('due_recurring', { mode: 'boolean' }).notNull().default(false),
+  // Duration reported by the provider; durationOverrideMinutes is set in Kairo and wins.
   durationMinutes: integer('duration_minutes'),
+  durationOverrideMinutes: integer('duration_override_minutes'),
+  // JSON TaskPatch awaiting push to the provider; sync must not overwrite these fields.
+  pendingPatch: text('pending_patch'),
   completed: integer('completed', { mode: 'boolean' }).notNull().default(false),
+  completedAt: timestamp('completed_at'),
   deleted: integer('deleted', { mode: 'boolean' }).notNull().default(false),
   providerUpdatedAt: timestamp('provider_updated_at'),
   updatedAt: timestamp('updated_at').notNull().$defaultFn(now),
@@ -229,6 +238,17 @@ export const taskBlock = sqliteTable('task_block', {
   lastError: text('last_error'),
   createdAt: timestamp('created_at').notNull().$defaultFn(now),
   updatedAt: timestamp('updated_at').notNull().$defaultFn(now),
+}, (table) => [index('task_block_task').on(table.taskId)])
+
+export const taskEstimate = sqliteTable('task_estimate', {
+  taskId: text('task_id').primaryKey().references(() => task.id, { onDelete: 'cascade' }),
+  minutes: integer('minutes').notNull(),
+  confidence: text('confidence', { enum: ['low', 'medium', 'high'] }),
+  rationale: text('rationale'),
+  provider: text('provider').notNull(),
+  model: text('model').notNull(),
+  inputHash: text('input_hash').notNull(),
+  estimatedAt: timestamp('estimated_at').notNull().$defaultFn(now),
 })
 
 export const syncJob = sqliteTable('sync_job', {

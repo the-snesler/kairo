@@ -7,8 +7,10 @@ export interface CalendarEvent {
   start: string
   end: string
   allDay?: boolean
-  kind: 'google' | 'external' | 'projection' | 'taskBlock' | 'taskDue'
+  kind: 'google' | 'external' | 'projection' | 'task'
+  // For kind 'task': the task this card represents. Timed when due has a time, otherwise all-day.
   taskId?: string
+  task?: TaskSummary
   calendarId?: string
   calendarColor?: string
   eventColor?: string
@@ -48,6 +50,9 @@ export interface CalendarWorkspaceProps {
   onEventCreate?: (event: Omit<CalendarEvent, 'id'>) => void | Promise<void>
   onEventDelete?: (event: CalendarEvent) => void | Promise<void>
   onDecisionChange?: (event: CalendarEvent, decision: EventDecision, calendarId?: string) => void | Promise<void>
-  onTaskDrop?: (taskId: string, start: Date, end: Date) => void | Promise<void>
+  tasks?: TaskSummary[]
+  onTaskChange?: (taskId: string, patch: TaskPatch & { durationMinutes?: number | null }) => void | Promise<void>
+  onTaskOpen?: (taskId: string, anchor: HTMLElement) => void
 }
 import type { ReactNode } from 'react'
+import type { TaskPatch, TaskSummary } from '../tasks/types'

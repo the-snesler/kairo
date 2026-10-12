@@ -18,5 +18,6 @@ export const decideExternalEvent = createServerFn({ method: 'POST' }).validator(
 export const resolveProjectionConflict = createServerFn({ method: 'POST' }).validator(z.object({ id: z.string(), action: z.enum(['restore', 'keep-google', 'remove-decision']) })).handler(async ({ data }) => (await import('./calendar.server')).resolveProjectionConflictImpl(data))
 export const saveGoogleEvent = createServerFn({ method: 'POST' }).validator(eventInput).handler(async ({ data }) => (await import('./calendar.server')).saveGoogleEventImpl(data))
 export const deleteGoogleEvent = createServerFn({ method: 'POST' }).validator(z.object({ id: z.string() })).handler(async ({ data }) => (await import('./calendar.server')).deleteGoogleEventImpl(data))
-export const saveTaskBlock = createServerFn({ method: 'POST' }).validator(z.object({ id: z.string().optional(), taskId: z.string(), calendarId: z.string(), start: dateInput, end: dateInput })).handler(async ({ data }) => (await import('./calendar.server')).saveTaskBlockImpl(data))
-export const deleteTaskBlock = createServerFn({ method: 'POST' }).validator(z.object({ id: z.string() })).handler(async ({ data }) => (await import('./calendar.server')).deleteTaskBlockImpl(data))
+const taskDueInput = z.union([z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }), z.object({ dateTime: dateInput })]).nullable()
+const taskInput = z.object({ id: z.string(), title: z.string().trim().min(1).max(500).optional(), due: taskDueInput.optional(), completed: z.boolean().optional(), durationMinutes: z.number().int().min(5).max(24 * 60).nullable().optional() })
+export const updateTask = createServerFn({ method: 'POST' }).validator(taskInput).handler(async ({ data }) => (await import('./tasks.server')).updateTaskImpl(data))

@@ -15,6 +15,13 @@
       "when": 1790285210268,
       "tag": "0001_single-owner",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1791830050440,
+      "tag": "0002_task-model",
+      "breakpoints": true
     }
   ]
 }
