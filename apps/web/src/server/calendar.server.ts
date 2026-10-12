@@ -5,7 +5,7 @@ import { enqueueJob, normalizeGoogleEvent, reconcileProjection } from '@kairo/co
 import { GoogleApiError, type GoogleEvent } from '@kairo/integrations'
 import type { CalendarEvent } from '../features/calendar/types'
 import { getAuthStatus, getSession, requireUser } from './auth'
-import { clientForCalendar, ensureTodoistConnection, processJobs, syncAll, syncIcsSource } from './sync'
+import { clientForCalendar, processJobs, syncAll, syncIcsSource } from './sync'
 
 async function ownedCalendar(userId: string, calendarId: string) {
   const [row] = await db.select({ cal: calendar, access: accountAccess }).from(calendar)
@@ -118,7 +118,7 @@ export async function getCalendarSnapshotImpl(data: { start: string; end: string
     const next = new Date(Date.parse(`${due}T00:00:00Z`) + 86400_000).toISOString().slice(0, 10)
     if (intersects(due, next, start, end)) events.push({ id: `due:${item.id}`, kind: 'taskDue', taskId: item.id, title: `Due: ${item.content}`, start: due, end: next, allDay: true, editable: false })
   }
-  return { calendars, sources: externalSources.map((item) => ({ id: item.id, name: item.name, color: item.color, status: item.status, lastError: item.lastError })), tasks: tasks.map((item) => ({ id: item.id, title: item.content, dueDate: item.dueDate, priority: item.priority, projectName: item.projectName })), events, conflicts, connections: { google: owned.length > 0, todoist: connections.length > 0 }, errors: [...calendars.filter((item) => item.lastError).map((item) => `${item.name}: ${item.lastError}`), ...externalSources.filter((item) => item.lastError).map((item) => `${item.name}: ${item.lastError}`), ...connections.filter((item) => item.lastError).map((item) => `Todoist: ${item.lastError}`)] }
+  return { calendars, sources: externalSources.map((item) => ({ id: item.id, name: item.name, color: item.color, status: item.status, lastError: item.lastError })), tasks: tasks.map((item) => ({ id: item.id, title: item.content, dueDate: item.dueDate, priority: item.priority, projectName: item.projectName })), events, conflicts, connections: { google: owned.length > 0, todoist: connections.some((item) => !!item.providerSubject && !!item.encryptedCredentials && item.status !== 'reconnect'), todoistNeedsReconnect: connections.some((item) => item.status === 'reconnect' || !item.providerSubject) }, errors: [...calendars.filter((item) => item.lastError).map((item) => `${item.name}: ${item.lastError}`), ...externalSources.filter((item) => item.lastError).map((item) => `${item.name}: ${item.lastError}`), ...connections.filter((item) => item.lastError).map((item) => `Todoist: ${item.lastError}`)] }
 }
 
 export async function resolveProjectionConflictImpl(data: { id: string; action: 'restore' | 'keep-google' | 'remove-decision' }) {
@@ -319,11 +319,3 @@ export async function deleteTaskBlockImpl(data: { id: string }) {
   await db.delete(taskBlock).where(eq(taskBlock.id, row.block.id))
   return { ok: true }
 }
-
-export async function connectTodoistTokenImpl(data: { token?: string }) {
-  const user = await requireUser()
-  if (data.token) throw new Error('Use the server TODOIST_API_TOKEN setting for this release')
-  const connection = await ensureTodoistConnection(user.id)
-  if (!connection) throw new Error('Set TODOIST_API_TOKEN on the server')
-  await syncAll(user.id)
-  return { ok: true }}

@@ -14,6 +14,8 @@ import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiGoogleCallbackRouteImport } from './routes/api/google/callback'
 import { Route as ApiGoogleConnectRouteImport } from './routes/api/google/connect'
+import { Route as ApiTodoistCallbackRouteImport } from './routes/api/todoist/callback'
+import { Route as ApiTodoistConnectRouteImport } from './routes/api/todoist/connect'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -40,6 +42,16 @@ const ApiGoogleConnectRoute = ApiGoogleConnectRouteImport.update({
   path: '/api/google/connect',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiTodoistCallbackRoute = ApiTodoistCallbackRouteImport.update({
+  id: '/api/todoist/callback',
+  path: '/api/todoist/callback',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiTodoistConnectRoute = ApiTodoistConnectRouteImport.update({
+  id: '/api/todoist/connect',
+  path: '/api/todoist/connect',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -47,6 +59,8 @@ export interface FileRoutesByFullPath {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/google/callback': typeof ApiGoogleCallbackRoute
   '/api/google/connect': typeof ApiGoogleConnectRoute
+  '/api/todoist/callback': typeof ApiTodoistCallbackRoute
+  '/api/todoist/connect': typeof ApiTodoistConnectRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -54,6 +68,8 @@ export interface FileRoutesByTo {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/google/callback': typeof ApiGoogleCallbackRoute
   '/api/google/connect': typeof ApiGoogleConnectRoute
+  '/api/todoist/callback': typeof ApiTodoistCallbackRoute
+  '/api/todoist/connect': typeof ApiTodoistConnectRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -62,6 +78,8 @@ export interface FileRoutesById {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/google/callback': typeof ApiGoogleCallbackRoute
   '/api/google/connect': typeof ApiGoogleConnectRoute
+  '/api/todoist/callback': typeof ApiTodoistCallbackRoute
+  '/api/todoist/connect': typeof ApiTodoistConnectRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -71,6 +89,8 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/api/google/callback'
     | '/api/google/connect'
+    | '/api/todoist/callback'
+    | '/api/todoist/connect'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -78,6 +98,8 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/api/google/callback'
     | '/api/google/connect'
+    | '/api/todoist/callback'
+    | '/api/todoist/connect'
   id:
     | '__root__'
     | '/'
@@ -85,6 +107,8 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/api/google/callback'
     | '/api/google/connect'
+    | '/api/todoist/callback'
+    | '/api/todoist/connect'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -93,6 +117,8 @@ export interface RootRouteChildren {
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiGoogleCallbackRoute: typeof ApiGoogleCallbackRoute
   ApiGoogleConnectRoute: typeof ApiGoogleConnectRoute
+  ApiTodoistCallbackRoute: typeof ApiTodoistCallbackRoute
+  ApiTodoistConnectRoute: typeof ApiTodoistConnectRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -132,6 +158,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiGoogleConnectRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/todoist/callback': {
+      id: '/api/todoist/callback'
+      path: '/api/todoist/callback'
+      fullPath: '/api/todoist/callback'
+      preLoaderRoute: typeof ApiTodoistCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/todoist/connect': {
+      id: '/api/todoist/connect'
+      path: '/api/todoist/connect'
+      fullPath: '/api/todoist/connect'
+      preLoaderRoute: typeof ApiTodoistConnectRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -141,6 +181,8 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiGoogleCallbackRoute: ApiGoogleCallbackRoute,
   ApiGoogleConnectRoute: ApiGoogleConnectRoute,
+  ApiTodoistCallbackRoute: ApiTodoistCallbackRoute,
+  ApiTodoistConnectRoute: ApiTodoistConnectRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

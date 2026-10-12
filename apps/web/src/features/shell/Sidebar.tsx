@@ -1,5 +1,5 @@
 import { addDays, addMonths, endOfMonth, endOfWeek, format, isSameDay, isSameMonth, startOfMonth, startOfWeek, subMonths } from 'date-fns'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import IconCalendar from '~icons/tabler/calendar-month'
 import IconChevronLeft from '~icons/tabler/chevron-left'
 import IconChevronRight from '~icons/tabler/chevron-right'
@@ -45,6 +45,10 @@ interface Props {
 
 export function Sidebar(props: Props) {
   const [month, setMonth] = useState(startOfMonth(props.selectedDate))
+  useEffect(() => {
+    const middle = props.visibleDays[Math.floor(props.visibleDays.length / 2)]
+    if (middle) setMonth(startOfMonth(middle))
+  }, [props.visibleDays])
   const days = useMemo(() => {
     const first = startOfWeek(startOfMonth(month), { weekStartsOn: 1 })
     const last = endOfWeek(endOfMonth(month), { weekStartsOn: 1 })
@@ -53,6 +57,8 @@ export function Sidebar(props: Props) {
     return values
   }, [month])
   const active = new Set(props.visibleDays.map((day) => format(day, 'yyyy-MM-dd')))
+  const rangeStart = props.visibleDays[0] && format(props.visibleDays[0], 'yyyy-MM-dd')
+  const rangeEnd = props.visibleDays.at(-1) && format(props.visibleDays.at(-1)!, 'yyyy-MM-dd')
   const today = new Date()
 
   return <aside className="kairo-sidebar">
@@ -63,7 +69,7 @@ export function Sidebar(props: Props) {
         <div className="mini-grid mini-weekdays">{['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((name, i) => <span key={i}>{name}</span>)}</div>
         <div className="mini-grid mini-days">{days.map((day) => {
           const key = format(day, 'yyyy-MM-dd')
-          return <button key={key} className={`${active.has(key) ? 'in-range' : ''} ${isSameDay(day, today) ? 'today' : ''} ${isSameMonth(day, month) ? '' : 'out-month'} ${isSameDay(day, props.selectedDate) ? 'selected' : ''}`} onClick={() => props.onDateChange(day)} aria-label={format(day, 'EEEE, MMMM d, yyyy')} aria-current={isSameDay(day, today) ? 'date' : undefined}>{format(day, 'd')}</button>
+          return <button key={key} className={`${active.has(key) ? 'in-range' : ''} ${key === rangeStart ? 'range-start' : ''} ${key === rangeEnd ? 'range-end' : ''} ${isSameDay(day, today) ? 'today' : ''} ${isSameMonth(day, month) ? '' : 'out-month'}`} onClick={() => props.onDateChange(day)} aria-label={format(day, 'EEEE, MMMM d, yyyy')} aria-current={isSameDay(day, today) ? 'date' : undefined}>{format(day, 'd')}</button>
         })}</div>
       </div>
 

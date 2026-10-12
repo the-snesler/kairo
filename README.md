@@ -4,7 +4,7 @@ Kairo is a self-hosted calendar workspace for ordinary Google events, Todoist ta
 
 ## Start locally
 
-Requires Node 24 and pnpm 10. Copy `.env.example` to `.env`, then set `BETTER_AUTH_SECRET` and `ENCRYPTION_KEY` to separate random values of at least 32 characters. Put your Google OAuth web client ID and secret in `.env`, or point `GOOGLE_OAUTH_CLIENT_FILE` at its JSON file. Set `TODOIST_API_TOKEN` for Todoist read sync.
+Requires Node 24 and pnpm 10. Copy `.env.example` to `.env`, then set `BETTER_AUTH_SECRET` and `ENCRYPTION_KEY` to separate random values of at least 32 characters. Put your Google OAuth web client ID and secret in `.env`, or point `GOOGLE_OAUTH_CLIENT_FILE` at its JSON file. Set `TODOIST_CLIENT_ID` and `TODOIST_CLIENT_SECRET` from your Todoist app.
 
 ```sh
 pnpm install
@@ -27,7 +27,7 @@ The JSON client file is ignored by Git and Docker. For Docker, put `GOOGLE_CLIEN
 
 Create a Google OAuth **Web application** credential. Add the exact redirect URI `https://YOUR_HOST/api/google/callback` (or `http://localhost:3000/api/google/callback` for local development). The app requests Google Calendar access and offline refresh. A Google OAuth app left in external **Testing** status can issue refresh tokens that expire after seven days; publish or configure the consent screen appropriately for long-running sync. Kairo stores access/refresh tokens encrypted in SQLite using `ENCRYPTION_KEY`.
 
-Todoist v0.1 reads the server's `TODOIST_API_TOKEN` through `/api/v1/sync`. Set it before starting, then use **Connect Todoist** in Settings or **Sync now**. The task due date stays separate from reserved work time. Drag a task onto the calendar to create a Google-backed work block. Task completion/write access is not included in this release.
+Create a Todoist app and register the exact redirect URI `https://YOUR_HOST/api/todoist/callback` (or `http://localhost:3000/api/todoist/callback` locally). Set its client ID and secret in `.env`, then use **Connect Todoist** in Settings. Kairo requests `data:read`, encrypts access and refresh tokens in SQLite, rotates refresh tokens during background sync, and asks for reconnection if authorization expires. Reconnecting the same Todoist account reuses its task connection, tasks, and scheduled blocks. Connecting a different account over existing tasks is rejected to protect those mappings. The task due date stays separate from reserved work time. Drag a task onto the calendar to create a Google-backed work block. Task completion/write access is not included in this release.
 
 ## Using Maybe
 
@@ -35,7 +35,7 @@ Add an ICS feed in the sidebar. Undecided events appear with a dashed outline. O
 
 ## Data and recovery
 
-Kairo keeps Google sync cursors, feed revisions, decisions, projection IDs, tasks, and work blocks in SQLite. The worker polls every five minutes; **Sync now** triggers the same logic. Connection and feed errors appear in the app. A revoked Google token marks the account for reconnection. An expired Google sync cursor triggers a full calendar sync. Failed or partial ICS downloads do not withdraw prior events.
+Kairo keeps Google sync cursors, feed revisions, decisions, projection IDs, tasks, and work blocks in SQLite. The worker polls every five minutes; **Sync now** triggers the same logic. Connection and feed errors appear in the app. Revoked Google or Todoist authorization marks the connection for reconnection. An expired Google sync cursor triggers a full calendar sync. Failed or partial ICS downloads do not withdraw prior events.
 
 For a consistent backup while Kairo is running, use SQLite's online backup command and save the encryption key separately:
 

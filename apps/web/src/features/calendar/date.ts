@@ -1,5 +1,5 @@
 export const DAY_MS = 86_400_000
-export const HOUR_HEIGHT = 72
+export const HOUR_HEIGHT = 50
 
 export function startOfDay(value: Date): Date {
   return new Date(value.getFullYear(), value.getMonth(), value.getDate())

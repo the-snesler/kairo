@@ -1,7 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
-import type { GoogleCredentials } from '@kairo/integrations'
+import type { GoogleCredentials, TodoistOAuthCredentials } from '@kairo/integrations'
 
 function key() {
   const value = process.env.ENCRYPTION_KEY
@@ -42,4 +42,12 @@ export function googleCredentials(): GoogleCredentials {
   }
   if (!clientId || !clientSecret) throw new Error('Google OAuth client credentials are missing')
   return { clientId, clientSecret, redirectUri: new URL('/api/google/callback', process.env.BETTER_AUTH_URL || 'http://localhost:3000').toString() }
+}
+
+export function todoistCredentials(): TodoistOAuthCredentials {
+  const clientId = process.env.TODOIST_CLIENT_ID
+  const clientSecret = process.env.TODOIST_CLIENT_SECRET
+  if (!clientId || !clientSecret) throw new Error('Todoist OAuth client credentials are missing')
+  return { clientId, clientSecret,
+    redirectUri: new URL('/api/todoist/callback', process.env.BETTER_AUTH_URL || 'http://localhost:3000').toString() }
 }

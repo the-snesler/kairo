@@ -36,6 +36,7 @@ export interface CalendarWorkspaceProps {
   initialDate?: Date
   showDeclined?: boolean
   showToolbar?: boolean
+  toolbarActions?: ReactNode
   showWeekends?: boolean
   timeZone?: string
   onViewChange?: (view: CalendarView) => void
@@ -49,3 +50,4 @@ export interface CalendarWorkspaceProps {
   onDecisionChange?: (event: CalendarEvent, decision: EventDecision, calendarId?: string) => void | Promise<void>
   onTaskDrop?: (taskId: string, start: Date, end: Date) => void | Promise<void>
 }
+import type { ReactNode } from 'react'

@@ -1,5 +1,5 @@
 import { autoUpdate, flip, FloatingPortal, offset, shift, useDismiss, useFloating, useInteractions, useRole } from '@floating-ui/react'
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, DragEvent as ReactDragEvent, PointerEvent as ReactPointerEvent } from 'react'
 import { flushSync } from 'react-dom'
 import IconChevronLeft from '~icons/tabler/chevron-left'
@@ -17,6 +17,7 @@ import './calendar.css'
 export type { CalendarEvent, CalendarOption, CalendarView, CalendarWorkspaceProps, EventDecision } from './types'
 
 const STRIP_DAYS = 35
+const STRIP_REBASE_DAYS = 14
 const HOURS = Array.from({ length: 24 }, (_, i) => i)
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const colorPattern = /^#[0-9a-f]{6}$/i
@@ -95,6 +96,7 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
   const [columnWidth, setColumnWidth] = useState(160)
   const scroller = useRef<HTMLDivElement>(null)
   const timeline = useRef<HTMLDivElement>(null)
+  const hourLabels = useRef<HTMLDivElement>(null)
   const dateRef = useRef(dayKey(props.date ?? props.initialDate ?? new Date()))
   const dragRef = useRef<{ event: CalendarEvent, x: number, y: number, resize: boolean, moved: boolean, changed?: CalendarEvent } | null>(null)
   const stripStartRef = useRef(stripStart)
@@ -162,6 +164,7 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
     setStripStart(origin)
     node.scrollLeft = 14 * columnWidth
     if (!node.scrollTop) node.scrollTop = HOUR_HEIGHT * 6
+    if (hourLabels.current) hourLabels.current.style.transform = `translateY(-${node.scrollTop}px)`
     reportDays(first, view === 'day' ? 1 : 7)
   // A date supplied by the shell is ignored when it matches the current left day.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -190,18 +193,19 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
   const onScroll = () => {
     const node = scroller.current
     if (!node || view === 'month') return
+    if (hourLabels.current) hourLabels.current.style.transform = `translateY(-${node.scrollTop}px)`
     const leftIndex = Math.round(node.scrollLeft / columnWidth)
     const first = addDays(stripStartRef.current, leftIndex)
-    if (dayKey(first) !== dateRef.current) {
-      setDate(first)
-      reportDays(first, view === 'week' ? 7 : 1)
-    }
-    if (leftIndex < 7 || leftIndex > 21) {
-      const shiftDays = leftIndex < 7 ? -7 : 7
+    if (leftIndex < 3 || leftIndex > 25) {
+      const shiftDays = leftIndex < 3 ? -STRIP_REBASE_DAYS : STRIP_REBASE_DAYS
       stripStartRef.current = addDays(stripStartRef.current, shiftDays)
       flushSync(() => setStripStart(stripStartRef.current))
       node.scrollLeft -= shiftDays * columnWidth
     }
+    if (dayKey(first) !== dateRef.current) startTransition(() => {
+      setDate(first)
+      reportDays(first, view === 'week' ? 7 : 1)
+    })
   }
 
   const navigate = (direction: number) => {
@@ -366,12 +370,24 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
   }
 
   const days = useMemo(() => Array.from({ length: STRIP_DAYS }, (_, i) => addDays(stripStart, i)), [stripStart])
+  const eventsByDay = useMemo(() => {
+    const indexed = new Map(days.map(day => [dayKey(day), [] as CalendarEvent[]]))
+    for (const event of visibleEvents) {
+      const start = parseEventDate(event.start, event.allDay)
+      const end = parseEventDate(event.end, event.allDay)
+      for (let day = startOfDay(start < days[0] ? days[0] : start); day <= days[days.length - 1] && day < end; day = addDays(day, 1))
+        indexed.get(dayKey(day))?.push(event)
+    }
+    for (const events of indexed.values()) events.sort((a, b) => Number(b.kind === 'taskDue') - Number(a.kind === 'taskDue'))
+    return indexed
+  }, [days, visibleEvents])
+  const allDayCount = Math.max(1, ...days.map(day => eventsByDay.get(dayKey(day))!.filter(event => event.allDay).length))
   const monthFirst = new Date(date.getFullYear(), date.getMonth(), 1)
   const monthStart = startOfWeek(monthFirst)
   const monthDays = Array.from({ length: 42 }, (_, i) => addDays(monthStart, i))
   const monthLabel = new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(date)
 
-  return <section className="cal-workspace" aria-label="Calendar">
+  return <section className="cal-workspace" aria-label="Calendar" style={{ '--hour-height': `${HOUR_HEIGHT}px` } as CSSProperties}>
     {props.showToolbar !== false && <header className="cal-toolbar">
       <div className="cal-heading"><h1>{monthLabel}</h1><span className="cal-zone">{props.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone}</span></div>
       <div className="cal-controls">
@@ -386,6 +402,7 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
         <button type="button" className="cal-button" onClick={jumpToday}>Today</button>
         <button type="button" className="cal-icon-button" aria-label="Previous" onClick={() => navigate(-1)}><IconChevronLeft /></button>
         <button type="button" className="cal-icon-button" aria-label="Next" onClick={() => navigate(1)}><IconChevronRight /></button>
+        {props.toolbarActions}
       </div>
     </header>}
     {view === 'month' ? <div className="cal-month">
@@ -398,20 +415,20 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
           <div className="cal-month-events">{items.slice(0, 4).map(event => <EventCard key={event.id} compact event={event} past={parseEventDate(event.end, event.allDay) < new Date()} onOpen={openEditor} />)}{items.length > 4 && <span className="cal-more">+{items.length - 4} more</span>}</div>
         </div>
       })}</div>
-    </div> : <div className="cal-timeline-shell">
+    </div> : <div className="cal-timeline-shell" style={{ '--all-day-height': `min(${Math.max(58, allDayCount * 23 + 6)}px, max(58px, 35vh))` } as CSSProperties}>
       <div className="cal-gutter-head"><span>All-day</span></div>
       <div className="cal-scroll" ref={scroller} onScroll={onScroll}>
         <div className="cal-strip" style={{ width: columnWidth * STRIP_DAYS }}>
           <div className="cal-strip-head">{days.map(day => <div className={`cal-day-head ${sameDay(day, today) ? 'cal-current-day' : ''}`} key={dayKey(day)} style={{ width: columnWidth }}><span>{WEEKDAYS[day.getDay()]}</span><strong>{day.getDate()}</strong></div>)}</div>
           <div className="cal-allday-row">{days.map(day => {
             const dropKey = `all-${dayKey(day)}`
-            return <div key={dayKey(day)} className={`cal-allday-cell ${dropTarget?.key === dropKey ? 'cal-drop-target' : ''}`} style={{ width: columnWidth }} onDoubleClick={e => createAt(e.currentTarget, day, 0, true)} onDragOver={e => taskDragOver(e, dropKey)} onDragLeave={taskDragLeave} onDrop={e => taskDrop(e, day, 9 * 60)}>{visibleEvents.filter(event => event.allDay && eventIntersectsDay(parseEventDate(event.start, true), parseEventDate(event.end, true), day)).sort((a, b) => Number(b.kind === 'taskDue') - Number(a.kind === 'taskDue')).slice(0, 2).map(event => <EventCard key={event.id} compact event={event} past={parseEventDate(event.end, true) < new Date()} onOpen={(element, item) => { if (!suppressClickRef.current) openEditor(element, item) }} onPointerDown={startDrag} />)}</div>
+            return <div key={dayKey(day)} className={`cal-allday-cell ${dropTarget?.key === dropKey ? 'cal-drop-target' : ''}`} style={{ width: columnWidth }} onDoubleClick={e => createAt(e.currentTarget, day, 0, true)} onDragOver={e => taskDragOver(e, dropKey)} onDragLeave={taskDragLeave} onDrop={e => taskDrop(e, day, 9 * 60)}>{eventsByDay.get(dayKey(day))!.filter(event => event.allDay).map(event => <EventCard key={event.id} compact event={event} past={parseEventDate(event.end, true) < new Date()} onOpen={(element, item) => { if (!suppressClickRef.current) openEditor(element, item) }} onPointerDown={startDrag} />)}</div>
           })}</div>
           <div className="cal-time-grid" ref={timeline} style={{ height: HOUR_HEIGHT * 24 }}>
             {days.map(day => {
               const dropKey = `time-${dayKey(day)}`
               return <div className={`cal-time-day ${sameDay(day, today) ? 'cal-current-day' : ''} ${dropTarget?.key === dropKey ? 'cal-drop-target' : ''}`} key={dayKey(day)} style={{ width: columnWidth, '--drop-top': `${(dropTarget?.key === dropKey ? dropTarget.minutes ?? 0 : 0) / 60 * HOUR_HEIGHT}px` } as CSSProperties} onDoubleClick={e => { const box = e.currentTarget.getBoundingClientRect(); const minutes = Math.max(0, Math.min(23 * 60, Math.round((e.clientY - box.top) / HOUR_HEIGHT * 4) * 15)); createAt(e.currentTarget, day, minutes) }} onDragOver={e => taskDragOver(e, dropKey, dropMinute(e))} onDragLeave={taskDragLeave} onDrop={e => taskDrop(e, day, dropMinute(e))}>
-              {timedSegments(visibleEvents, day, HOUR_HEIGHT).map(segment => <div key={`${segment.event.id}-${dayKey(day)}`} className="cal-event-position" style={{ top: segment.top, height: segment.height, left: `${segment.left}%`, width: `${segment.width}%` }}>
+              {timedSegments(eventsByDay.get(dayKey(day))!, day, HOUR_HEIGHT).map(segment => <div key={`${segment.event.id}-${dayKey(day)}`} className="cal-event-position" style={{ top: segment.top, height: segment.height, left: `${segment.left}%`, width: `${segment.width}%` }}>
                 <EventCard event={segment.event} past={parseEventDate(segment.event.end) < new Date()} onOpen={(element, event) => { if (!suppressClickRef.current) openEditor(element, event) }} onPointerDown={startDrag} />
               </div>)}
             </div>})}
@@ -419,7 +436,7 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
           </div>
         </div>
       </div>
-      <div className="cal-hour-labels">{HOURS.map(hour => <span key={hour} style={{ top: hour * HOUR_HEIGHT }}>{hour === 0 ? '' : formatTime(new Date(2024, 0, 1, hour))}</span>)}</div>
+      <div className="cal-hour-labels-clip"><div className="cal-hour-labels" ref={hourLabels}>{HOURS.map(hour => <span key={hour} style={{ top: hour * HOUR_HEIGHT }}>{hour === 0 ? '' : formatTime(new Date(2024, 0, 1, hour))}</span>)}</div></div>
     </div>}
     <button className="cal-mobile-add" type="button" aria-label="New event" onClick={e => createAt(e.currentTarget, date, 9 * 60)}><IconPlus /></button>
     {dropError && <div className="cal-drop-error" role="alert">{dropError}<button type="button" aria-label="Dismiss error" onClick={() => setDropError('')}><IconX /></button></div>}

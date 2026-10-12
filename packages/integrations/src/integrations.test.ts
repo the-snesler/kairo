@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { GoogleCalendarClient, syncGoogleEvents } from './google/index.js';
 import { parseIcs } from './ics/index.js';
-import { syncTodoist } from './todoist/index.js';
+import { exchangeTodoistCode, refreshTodoistToken, syncTodoist, todoistAuthorizationUrl } from './todoist/index.js';
 
 test('Google sync follows pages and commits only the final cursor', async () => {
   const requests: URL[] = [];
@@ -47,4 +47,31 @@ test('Todoist uses the v1 form sync contract', async () => {
     return Response.json({ sync_token: 'next', full_sync: false, items: [] });
   });
   assert.equal(result.sync_token, 'next');
+});
+
+test('Todoist OAuth requests read scope and exchanges a code', async () => {
+  const credentials = { clientId: 'client', clientSecret: 'secret', redirectUri: 'http://localhost:3000/api/todoist/callback' };
+  const url = new URL(todoistAuthorizationUrl(credentials, 'csrf-state'));
+  assert.equal(url.origin, 'https://app.todoist.com');
+  assert.equal(url.searchParams.get('scope'), 'data:read');
+  assert.equal(url.searchParams.get('state'), 'csrf-state');
+  const token = await exchangeTodoistCode(credentials, 'code', async (input, init) => {
+    assert.equal(input, 'https://api.todoist.com/oauth/access_token');
+    const body = init?.body as URLSearchParams;
+    assert.equal(body.get('code'), 'code');
+    assert.equal(body.get('redirect_uri'), credentials.redirectUri);
+    return Response.json({ access_token: 'access', refresh_token: 'refresh', expires_in: 3600, scope: 'data:read' });
+  });
+  assert.equal(token.refresh_token, 'refresh');
+});
+
+test('Todoist refresh requests a rotated token', async () => {
+  const credentials = { clientId: 'client', clientSecret: 'secret', redirectUri: 'http://localhost:3000/api/todoist/callback' };
+  const token = await refreshTodoistToken(credentials, 'old-refresh', async (_input, init) => {
+    const body = init?.body as URLSearchParams;
+    assert.equal(body.get('grant_type'), 'refresh_token');
+    assert.equal(body.get('refresh_token'), 'old-refresh');
+    return Response.json({ access_token: 'new-access', refresh_token: 'new-refresh', expires_in: 3600 });
+  });
+  assert.equal(token.refresh_token, 'new-refresh');
 });
