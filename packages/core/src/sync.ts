@@ -115,15 +115,17 @@ export function normalizedTaskValues(item: NormalizedTask) {
 export async function applyTaskSync(db: Db, connectionId: string, result: TaskSyncResult): Promise<string[]> {
   return db.transaction((tx: Db) => {
     const now = new Date(); const touched: string[] = [];
-    // Incremental syncs only carry changed projects; fall back to names already stored for that project.
-    const known = new Map<string, string>(tx.select({ projectId: task.projectId, projectName: task.projectName }).from(task)
-      .where(and(eq(task.connectionId, connectionId), isNotNull(task.projectId), isNotNull(task.projectName))).all().map((row: { projectId: string; projectName: string }) => [row.projectId, row.projectName]));
-    for (const project of result.projects ?? []) known.set(project.id, project.name);
+    // Incremental syncs only carry changed projects; fall back to the name and color already stored for that project.
+    const known = new Map<string, { name: string, color: string | null }>(tx.select({ projectId: task.projectId, projectName: task.projectName, projectColor: task.projectColor }).from(task)
+      .where(and(eq(task.connectionId, connectionId), isNotNull(task.projectId), isNotNull(task.projectName))).all()
+      .map((row: { projectId: string; projectName: string; projectColor: string | null }) => [row.projectId, { name: row.projectName, color: row.projectColor }]));
+    for (const project of result.projects ?? []) known.set(project.id, { name: project.name, color: project.color });
     if (result.full) tx.update(task).set({ deleted: true, updatedAt: now }).where(eq(task.connectionId, connectionId)).run();
     for (const item of result.tasks) {
       const existing = tx.select().from(task).where(and(eq(task.connectionId, connectionId), eq(task.todoistId, item.externalId))).get();
       const values: Record<string, unknown> = { ...normalizedTaskValues(item), updatedAt: now,
-        projectName: item.projectName ?? (item.projectId ? known.get(item.projectId) ?? null : null) };
+        projectName: item.projectName ?? (item.projectId ? known.get(item.projectId)?.name ?? null : null),
+        projectColor: item.projectColor ?? (item.projectId ? known.get(item.projectId)?.color ?? null : null) };
       if (item.completed && !item.completedAt) values.completedAt = existing?.completedAt ?? now;
       const pending = existing?.pendingPatch ? JSON.parse(existing.pendingPatch) as TaskPatch : {};
       for (const key of Object.keys(pending) as (keyof TaskPatch)[]) for (const column of pendingColumns[key] ?? []) delete values[column];
@@ -133,7 +135,7 @@ export async function applyTaskSync(db: Db, connectionId: string, result: TaskSy
       } else touched.push(tx.insert(task).values({ ...values, connectionId, todoistId: item.externalId }).returning().get().id);
     }
     for (const project of result.projects ?? [])
-      tx.update(task).set({ projectName: project.name }).where(and(eq(task.connectionId, connectionId), eq(task.projectId, project.id))).run();
+      tx.update(task).set({ projectName: project.name, projectColor: project.color }).where(and(eq(task.connectionId, connectionId), eq(task.projectId, project.id))).run();
     tx.update(taskConnection).set({ syncToken: result.cursor, status: 'ready', lastError: null,
       lastSyncedAt: now, updatedAt: now }).where(eq(taskConnection.id, connectionId)).run();
     return touched;

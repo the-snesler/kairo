@@ -15,6 +15,7 @@ export type NormalizedTask = {
   description: string | null
   projectId: string | null
   projectName: string | null
+  projectColor: string | null // hex
   priority: number
   due: (TaskDue & { timeZone?: string | null, string?: string | null, recurring?: boolean }) | null
   durationMinutes: number | null
@@ -50,8 +51,8 @@ export interface TaskProvider {
   taskUrl?(externalId: string): string
 }
 
-// `projects` lists project names seen in this sync so stored tasks can be renamed without being resent.
-export type TaskSyncResult = { tasks: NormalizedTask[], cursor: string, full: boolean, projects?: { id: string, name: string }[] }
+// `projects` lists projects seen in this sync so stored tasks can be renamed/recolored without being resent.
+export type TaskSyncResult = { tasks: NormalizedTask[], cursor: string, full: boolean, projects?: { id: string, name: string, color: string | null }[] }
 
 // A patch the provider refused for good (validation, unsupported edit). Retrying will not help.
 export class TaskPatchError extends Error {

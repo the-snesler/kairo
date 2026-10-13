@@ -113,7 +113,7 @@ export async function getCalendarSnapshotImpl(data: { start: string; end: string
   const summaries: TaskSummary[] = tasks.map((item) => {
     const duration = effectiveTaskDuration(item, estimateBy.get(item.id))
     const connection = connectionsById.get(item.connectionId)!
-    return { id: item.id, title: item.content, description: item.description, projectName: item.projectName, priority: item.priority,
+    return { id: item.id, title: item.content, description: item.description, projectName: item.projectName, color: item.projectColor, priority: item.priority,
       due: item.dueDateTime ? { dateTime: item.dueDateTime.toISOString() } : item.dueDate ? { date: item.dueDate.slice(0, 10) } : null,
       recurring: item.dueRecurring, durationMinutes: duration.minutes, durationSource: duration.source, completed: item.completed,
       url: taskProviders[connection.provider]?.taskUrl?.(item.todoistId) ?? null, pending: !!item.pendingPatch }

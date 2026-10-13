@@ -8,6 +8,8 @@ export interface TaskSummary {
   title: string
   description?: string | null
   projectName?: string | null
+  // Hex color of the task's project, if the provider has one.
+  color?: string | null
   priority: number
   due: TaskDue | null
   recurring: boolean

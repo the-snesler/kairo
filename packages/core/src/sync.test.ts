@@ -10,7 +10,7 @@ import type { GoogleCalendarClient, NormalizedTask } from '@kairo/integrations';
 for (const file of readdirSync('../db/migrations').filter(name => name.endsWith('.sql')).sort())
   sqlite.exec(readFileSync(`../db/migrations/${file}`, 'utf8').replaceAll('--> statement-breakpoint', ''));
 const normalized = (externalId: string, overrides: Partial<NormalizedTask> = {}): NormalizedTask => ({ externalId, title: 'Work', description: null,
-  projectId: null, projectName: null, priority: 1, due: null, durationMinutes: null, completed: false, deleted: false, updatedAt: null, ...overrides });
+  projectId: null, projectName: null, projectColor: null, priority: 1, due: null, durationMinutes: null, completed: false, deleted: false, updatedAt: null, ...overrides });
 db.insert(user).values({ id: 'owner', name: 'Owner', email: 'owner@example.test' }).run();
 db.insert(connectedAccount).values({ id: 'account', ownerUserId: 'owner', provider: 'google' }).run();
 db.insert(calendar).values({ id: 'cal', connectedAccountId: 'account', googleCalendarId: 'primary', name: 'Calendar' }).run();
@@ -78,10 +78,11 @@ test('a remote Google edit is preserved until explicit restore', async () => {
 });
 
 test('task sync keeps pending fields and the duration override, and fills project names', async () => {
-  await applyTaskSync(db, 'todoist', { cursor: 'p-1', full: false, projects: [{ id: 'proj', name: 'Inbox' }],
+  await applyTaskSync(db, 'todoist', { cursor: 'p-1', full: false, projects: [{ id: 'proj', name: 'Inbox', color: '#808080' }],
     tasks: [normalized('todo-2', { title: 'Write', projectId: 'proj', due: { dateTime: '2026-09-24T10:00:00.000Z' }, durationMinutes: 45 })] });
   const local = db.select().from(task).where(eq(task.todoistId, 'todo-2')).get()!;
   assert.equal(local.projectName, 'Inbox');
+  assert.equal(local.projectColor, '#808080');
   const pendingPatch = JSON.stringify({ due: { dateTime: '2026-09-25T12:00:00.000Z' } });
   db.update(task).set({ pendingPatch, durationOverrideMinutes: 90, dueDateTime: new Date('2026-09-25T12:00:00Z') }).where(eq(task.id, local.id)).run();
   await applyTaskSync(db, 'todoist', { cursor: 'p-2', full: false,
@@ -92,8 +93,9 @@ test('task sync keeps pending fields and the duration override, and fills projec
   assert.equal(after.durationMinutes, 30);
   assert.equal(after.durationOverrideMinutes, 90);
   assert.equal(after.projectName, 'Inbox');
-  await applyTaskSync(db, 'todoist', { cursor: 'p-3', full: false, projects: [{ id: 'proj', name: 'Renamed' }], tasks: [] });
+  await applyTaskSync(db, 'todoist', { cursor: 'p-3', full: false, projects: [{ id: 'proj', name: 'Renamed', color: '#4073ff' }], tasks: [] });
   assert.equal(db.select().from(task).where(eq(task.id, local.id)).get()?.projectName, 'Renamed');
+  assert.equal(db.select().from(task).where(eq(task.id, local.id)).get()?.projectColor, '#4073ff');
 });
 
 test('an incremental sync names new tasks in unchanged projects', async () => {

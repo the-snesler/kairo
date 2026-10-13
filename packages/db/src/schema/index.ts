@@ -208,6 +208,7 @@ export const task = sqliteTable('task', {
   description: text('description'),
   projectId: text('project_id'),
   projectName: text('project_name'),
+  projectColor: text('project_color'),
   priority: integer('priority').notNull().default(1),
   dueDate: text('due_date'),
   dueDateTime: timestamp('due_date_time'),

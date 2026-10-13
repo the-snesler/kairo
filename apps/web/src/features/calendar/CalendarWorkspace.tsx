@@ -31,7 +31,7 @@ const colorPattern = /^#[0-9a-f]{6}$/i
 // Keep in sync with .cal-event-title / .cal-event-time line heights and the card's vertical chrome in calendar.css.
 const TITLE_LINE_HEIGHT = 14
 const TIMED_CARD_CHROME = 22
-const TASK_COLOR = '#a78bfa'
+const TASK_COLOR = '#f22420'
 const EXTERNAL_GHOST_HEIGHT = 22
 
 function safeColor(value: string | undefined, fallback = '#7894a8') {
@@ -43,7 +43,7 @@ function addMinutes(date: Date, minutes: number) {
 }
 
 function eventStyle(event: CalendarEvent, past: boolean): CSSProperties {
-  const calendar = safeColor(event.calendarColor, event.kind === 'task' ? TASK_COLOR : undefined)
+  const calendar = event.kind === 'task' ? safeColor(event.task?.color ?? undefined, TASK_COLOR) : safeColor(event.calendarColor)
   const eventColor = safeColor(event.eventColor, calendar)
   return {
     "--calendar-color": calendar,
@@ -90,6 +90,7 @@ function EventCard({
   event,
   compact,
   titleLines = 0,
+  narrow,
   past,
   draggable,
   dragging,
@@ -102,6 +103,8 @@ function EventCard({
   compact?: boolean;
   /** Title lines that fit above the time row; 0 lays title and time out on a single line. */
   titleLines?: number;
+  /** Shares its row with overlapping events: a one-line card gives the time's space to the title. */
+  narrow?: boolean;
   past: boolean;
   draggable?: boolean;
   /** The original card while a drag of it is in progress. */
@@ -126,6 +129,7 @@ function EventCard({
     : inline
       ? formatShortTime(start)
       : formatTimeRange(start, end));
+  const showTime = !!time && !(narrow && inline && timeLabel === undefined);
   return (
     <div
       className={`cal-event ${compact ? "cal-event-compact" : ""} ${inline ? "cal-event-inline" : ""} ${isDashed(event) ? "cal-event-dashed" : ""} ${event.declined ? "cal-event-declined" : ""} ${task ? "cal-event-task" : ""} ${completed ? "cal-event-completed" : ""} ${event.task?.pending ? "cal-event-pending" : ""} ${past ? "cal-event-past" : ""} ${draggable ? "cal-event-draggable" : ""} ${dragging ? "cal-event-dragging" : ""}`}
@@ -170,7 +174,7 @@ function EventCard({
         )}
         {event.title}
       </span>
-      {time && <span className="cal-event-time">{time}</span>}
+      {showTime && <span className="cal-event-time">{time}</span>}
       {!compact && draggable && onPointerDown && (
         <span
           className="cal-event-resize"
@@ -856,6 +860,7 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
                         >
                           <EventCard
                             event={segment.event}
+                            narrow={segment.width < 100}
                             titleLines={Math.floor(
                               (segment.height - TIMED_CARD_CHROME) /
                                 TITLE_LINE_HEIGHT,

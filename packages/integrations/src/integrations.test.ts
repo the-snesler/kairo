@@ -88,7 +88,7 @@ test('Todoist provider sync normalizes dues, projects, and keeps the timezone in
   const provider = createTodoistProvider({ fetch: async (_input, init) => {
     const body = init?.body as URLSearchParams; bodies.push(body);
     return Response.json(body.get('sync_token') === '*' ? { sync_token: 's1', full_sync: true, user: { tz_info: { timezone: 'America/Chicago' } },
-      projects: [{ id: 'p', name: 'Home' }], items: [
+      projects: [{ id: 'p', name: 'Home', color: 'berry_red' }], items: [
         { id: 'a', content: 'All day', project_id: 'p', due: { date: '2026-10-12', string: 'every day', is_recurring: true } },
         { id: 'b', content: 'Floating', due: { date: '2026-10-12T09:00:00.000000', timezone: null, string: 'Oct 12 9am' } },
         { id: 'c', content: 'Fixed', due: { date: '2026-10-12T14:00:00.000000Z', timezone: 'Europe/Madrid' }, duration: { amount: 2, unit: 'day' } }] }
@@ -99,11 +99,15 @@ test('Todoist provider sync normalizes dues, projects, and keeps the timezone in
   assert.equal(bodies[0].get('resource_types'), '["items","projects","user"]');
   assert.deepEqual(first.tasks[0].due, { date: '2026-10-12', timeZone: null, string: 'every day', recurring: true });
   assert.equal(first.tasks[0].projectName, 'Home');
+  assert.equal(first.tasks[0].projectColor, '#b8256f');
+  assert.equal(first.tasks[1].projectColor, null);
   assert.deepEqual(first.tasks[1].due, { dateTime: '2026-10-12T14:00:00.000Z', timeZone: null, string: 'Oct 12 9am', recurring: false });
   assert.equal(first.tasks[2].due && 'dateTime' in first.tasks[2].due && first.tasks[2].due.dateTime, '2026-10-12T14:00:00.000Z');
   assert.equal(first.tasks[2].durationMinutes, 2880);
   const second = await provider.sync('token', first.cursor);
   assert.equal(bodies[1].get('sync_token'), 's1');
+  await provider.sync('token', JSON.stringify({ v: 1, token: 's1', tz: null }));
+  assert.equal(bodies[2].get('sync_token'), '*');
   assert.equal(second.tasks[0].due && 'dateTime' in second.tasks[0].due && second.tasks[0].due.dateTime, '2026-10-13T14:00:00.000Z');
 });
 
