@@ -8,7 +8,7 @@ export type TodoistItem = {
   duration?: { amount: number; unit: 'minute' | 'day' } | null;
   checked?: boolean; is_deleted?: boolean; added_at?: string; updated_at?: string; completed_at?: string | null;
 };
-export type TodoistProject = { id: string; name?: string; color?: string; is_deleted?: boolean };
+export type TodoistProject = { id: string; name?: string; color?: string; inbox_project?: boolean; is_deleted?: boolean };
 // https://developer.todoist.com/guides/#colors
 const todoistColors: Record<string, string> = {
   berry_red: '#b8256f', red: '#db4035', orange: '#ff9933', yellow: '#fad000', olive_green: '#afb83b', lime_green: '#7ecc49',
@@ -132,9 +132,9 @@ export function normalizeTodoistItem(item: TodoistItem, projects: Map<string, Pr
 }
 
 // Kairo's cursor wraps the sync token with the user's timezone (needed to read floating times on incremental syncs).
-type Cursor = { v: 1 | 2; token: string; tz: string | null };
+type Cursor = { v: 1 | 2 | 3; token: string; tz: string | null };
 function parseCursor(cursor: string | null): Cursor | null {
-  try { const value = cursor ? JSON.parse(cursor) : null; return (value?.v === 1 || value?.v === 2) && typeof value.token === 'string' ? value : null; }
+  try { const value = cursor ? JSON.parse(cursor) : null; return [1, 2, 3].includes(value?.v) && typeof value.token === 'string' ? value : null; }
   catch { return null; }
 }
 
@@ -185,12 +185,13 @@ export function createTodoistProvider(options: TodoistProviderOptions = {}): Tas
     },
     async sync(token, cursor) {
       const previous = parseCursor(cursor);
-      // Older cursors predate projects/user resources or project colors: start over so they are filled.
-      const data = await syncTodoist(token, previous?.v === 2 ? previous.token : null, requestFetch, ['items', 'projects', 'user']);
+      // Older cursors predate projects/user resources or project colors (v3: Inbox uncolored): start over so they are filled.
+      const data = await syncTodoist(token, previous?.v === 3 ? previous.token : null, requestFetch, ['items', 'projects', 'user']);
       const tz = data.user?.tz_info?.timezone || previous?.tz || null;
       const projects = new Map<string, ProjectInfo>((data.projects ?? []).filter(project => !project.is_deleted && project.name)
-        .map(project => [project.id, { name: project.name!, color: todoistColor(project.color) }]));
-      return { tasks: (data.items ?? []).map(item => normalizeTodoistItem(item, projects, tz)), cursor: JSON.stringify({ v: 2, token: data.sync_token, tz } satisfies Cursor),
+        // The Inbox is charcoal in Todoist; leave it uncolored so it gets the default task color.
+        .map(project => [project.id, { name: project.name!, color: project.inbox_project ? null : todoistColor(project.color) }]));
+      return { tasks: (data.items ?? []).map(item => normalizeTodoistItem(item, projects, tz)), cursor: JSON.stringify({ v: 3, token: data.sync_token, tz } satisfies Cursor),
         full: data.full_sync, projects: [...projects].map(([id, project]) => ({ id, ...project })) };
     },
     // With context (stored due + cursor) a due edit is a single request; without it we read the task and user first.

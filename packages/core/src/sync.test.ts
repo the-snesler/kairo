@@ -182,14 +182,12 @@ test('mirror blocks are created, moved, and deleted through Google', async () =>
   assert.equal(stored.endAt.getTime() - stored.startAt.getTime(), 20 * 60_000);
   assert.deepEqual(await syncTaskBlocks(db, { connectionId: 'todoist' }, 'cal'), []);
   const calls: string[] = [];
-  const colors: string[] = [];
   const client = {
     findByPrivateProperty: async () => undefined,
-    closestEventColorId: async (hex: string) => { colors.push(hex); return '11'; },
     createEvent: async (_cal: string, body: { summary?: string, description?: string, colorId?: string }) => {
       calls.push(`create:${body.summary}`);
       assert.equal(body.description, 'Task blocked by Kairo');
-      assert.equal(body.colorId, '11');
+      assert.equal(body.colorId, '9'); // the project's Todoist blue → Blueberry
       return { id: 'g-block', etag: 'e1' };
     },
     updateEvent: async (_cal: string, id: string) => { calls.push(`update:${id}`); return { id, etag: 'e2' }; },
@@ -206,5 +204,4 @@ test('mirror blocks are created, moved, and deleted through Google', async () =>
   await reconcileTaskBlock(db, created, async () => client);
   assert.equal(db.select().from(taskBlock).where(eq(taskBlock.taskId, local.id)).all().length, 0);
   assert.deepEqual(calls, ['create:Write more', 'update:g-block', 'delete:g-block']);
-  assert.deepEqual(colors, ['#4073ff', '#4073ff']);
 });

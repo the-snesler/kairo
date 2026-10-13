@@ -13,15 +13,37 @@ export type GoogleTime = { date?: string; dateTime?: string; timeZone?: string }
 export type GoogleCalendar = { id: string; summary?: string; backgroundColor?: string; colorId?: string; accessRole?: string; primary?: boolean; timeZone?: string };
 export type GoogleColors = { calendar: Record<string, { background: string; foreground: string }>;
   event: Record<string, { background: string; foreground: string }> };
-const rgb = (hex: string) => [1, 3, 5].map((index) => parseInt(hex.slice(index, index + 2), 16));
-/** Id of the palette color nearest to a #rrggbb hex, since Google events only take palette colors. */
-export function closestColorId(palette: GoogleColors['event'], hex: string) {
-  const target = rgb(hex);
-  return Object.entries(palette).map(([id, value]) => ({ id, distance: rgb(value.background).reduce((sum, part, index) => sum + (part - target[index]) ** 2, 0) }))
-    .sort((a, b) => a.distance - b.distance)[0]?.id;
+// Event colors as Google Calendar's UI draws them. The API takes only these ids, and its /colors endpoint
+// still returns the older pastel palette, which matches poorly (e.g. grey lands on Basil).
+export const GOOGLE_EVENT_COLORS: Record<string, string> = {
+  '1': '#7986cb', '2': '#33b679', '3': '#8e24aa', '4': '#e67c73', '5': '#f6bf26', '6': '#f4511e',
+  '7': '#039be5', '8': '#616161', '9': '#3f51b5', '10': '#0b8043', '11': '#d50000',
+};
+const GRAPHITE = '8';
+// sRGB hex → OKLCh (lightness, chroma, hue in radians).
+function oklch(hex: string) {
+  const [r, g, b] = [1, 3, 5].map((index) => {
+    const c = parseInt(hex.slice(index, index + 2), 16) / 255;
+    return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  });
+  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+  const A = 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s, B = 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s;
+  return [0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s, Math.hypot(A, B), Math.atan2(B, A)];
 }
-// Google's event palette is fixed, so one fetch per process is enough.
-let eventPalette: Promise<GoogleColors['event']> | null = null;
+/** Id of the Google event color nearest to a #rrggbb hex: greys go to Graphite, other colors match mostly on hue. */
+export function closestEventColorId(hex: string) {
+  const [L, C, H] = oklch(hex);
+  if (C < 0.06) return GRAPHITE;
+  const distance = (candidate: string) => {
+    const [L2, C2, H2] = oklch(candidate);
+    const dh = Math.min(Math.abs(H - H2), 2 * Math.PI - Math.abs(H - H2));
+    return (0.3 * (L - L2)) ** 2 + 0.5 * (C - C2) ** 2 + 4 * (Math.min(C, C2) * dh) ** 2;
+  };
+  return Object.entries(GOOGLE_EVENT_COLORS).filter(([id]) => id !== GRAPHITE)
+    .sort(([, a], [, b]) => distance(a) - distance(b))[0][0];
+}
 export class GoogleApiError extends Error {
   constructor(public status: number, message: string) { super(message); this.name = 'GoogleApiError'; }
 }
@@ -70,10 +92,6 @@ export class GoogleCalendarClient {
     return all;
   }
   getColors() { return this.request<GoogleColors>('/colors'); }
-  async closestEventColorId(hex: string) {
-    eventPalette ??= this.getColors().then((colors) => colors.event).catch((error) => { eventPalette = null; throw error; });
-    return closestColorId(await eventPalette, hex);
-  }
   async listRangeEvents(calendarId: string, start: Date, end: Date): Promise<GoogleEvent[]> {
     const all: GoogleEvent[] = []; let pageToken: string | undefined;
     do {

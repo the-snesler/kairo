@@ -2,7 +2,7 @@ import '@tanstack/react-start/server-only'
 import { and, eq } from 'drizzle-orm'
 import { db, accountAccess, calendar, eventDecision, eventProjection, externalEvent, googleEvent, icsSource, task, taskConnection, taskEstimate, userCalendarSetting } from '@kairo/db'
 import { effectiveTaskDuration, enqueueJob, normalizeGoogleEvent, reconcileProjection } from '@kairo/core'
-import { GoogleApiError, type GoogleEvent } from '@kairo/integrations'
+import { closestEventColorId, GOOGLE_EVENT_COLORS, GoogleApiError, type GoogleEvent } from '@kairo/integrations'
 import type { CalendarEvent } from '../features/calendar/types'
 import type { TaskSummary } from '../features/tasks/types'
 import { getAuthStatus, getSession, requireUser } from './auth'
@@ -74,7 +74,6 @@ export async function getCalendarSnapshotImpl(data: { start: string; end: string
     try {
       const { client, cal } = await clientForCalendar(calendarId, user.id)
       const instances = await client.listRangeEvents(cal.googleCalendarId, start, end)
-      const colors = await client.getColors().then((result) => result.event).catch(() => ({} as Record<string, { background: string }>))
       const local = calendars.find((item) => item.id === calendarId)!
       for (const item of instances) {
         if (!item.recurringEventId || item.status === 'cancelled' || item.extendedProperties?.private?.kairoProjectionId || item.extendedProperties?.private?.kairoTaskBlockId) continue
@@ -83,7 +82,7 @@ export async function getCalendarSnapshotImpl(data: { start: string; end: string
         const eventEnd = item.end?.date || item.end?.dateTime
         if (!eventStart || !eventEnd || !intersects(eventStart, eventEnd, start, end)) continue
         const parent = storedGoogle.find((row) => row.calendarId === calendarId && row.googleEventId === item.recurringEventId)
-        events.push({ id: `instance:${calendarId}:${item.id}`, kind: 'google', title: item.summary || '(Untitled)', start: eventStart, end: eventEnd, allDay, calendarId, calendarColor: local.color, eventColor: item.colorId ? colors[item.colorId]?.background || parent?.color || local.color : parent?.color || local.color, status: item.status, declined: item.attendees?.some((attendee) => attendee.self && attendee.responseStatus === 'declined'), description: item.description, location: item.location, editable: false, recurring: true })
+        events.push({ id: `instance:${calendarId}:${item.id}`, kind: 'google', title: item.summary || '(Untitled)', start: eventStart, end: eventEnd, allDay, calendarId, calendarColor: local.color, eventColor: (item.colorId && GOOGLE_EVENT_COLORS[item.colorId]) || parent?.color || local.color, status: item.status, declined: item.attendees?.some((attendee) => attendee.self && attendee.responseStatus === 'declined'), description: item.description, location: item.location, editable: false, recurring: true })
       }
       expandedCalendars.add(calendarId)
     } catch (error) { console.error('Recurring Google range unavailable', error) }
@@ -95,7 +94,7 @@ export async function getCalendarSnapshotImpl(data: { start: string; end: string
     const eventStart = item.allDay ? item.startDate : item.startAt?.toISOString()
     const eventEnd = item.allDay ? item.endDate : item.endAt?.toISOString()
     if (!eventStart || !eventEnd || !intersects(eventStart, eventEnd, start, end)) continue
-    events.push({ id: item.id, kind: 'google', title: item.title || '(Untitled)', start: eventStart, end: eventEnd, allDay: item.allDay, calendarId: item.calendarId, calendarColor: cal.color, eventColor: item.color || cal.color, status: item.status, declined: item.responseStatus === 'declined', description: item.description || undefined, location: item.location || undefined, editable: cal.accessRole === 'owner' || cal.accessRole === 'writer', recurring: !!item.recurringEventId || !!item.originalStartTime || !!JSON.parse(item.rawJson || '{}').recurrence })
+    events.push({ id: item.id, kind: 'google', title: item.title || '(Untitled)', start: eventStart, end: eventEnd, allDay: item.allDay, calendarId: item.calendarId, calendarColor: cal.color, eventColor: (item.colorId && GOOGLE_EVENT_COLORS[item.colorId]) || item.color || cal.color, status: item.status, declined: item.responseStatus === 'declined', description: item.description || undefined, location: item.location || undefined, editable: cal.accessRole === 'owner' || cal.accessRole === 'writer', recurring: !!item.recurringEventId || !!item.originalStartTime || !!JSON.parse(item.rawJson || '{}').recurrence })
   }
   for (const item of storedExternal) {
     if (!sourceIds.has(item.sourceId) || item.withdrawnAt || item.status === 'cancelled') continue
@@ -242,11 +241,7 @@ export async function saveGoogleEventImpl(data: { id?: string; title: string; st
   const body: Partial<GoogleEvent> = { summary: data.title, description: data.description, location: data.location,
     start: data.allDay ? { date: data.start.slice(0, 10) } : { dateTime: data.start },
     end: data.allDay ? { date: data.end.slice(0, 10) } : { dateTime: data.end } }
-  if (data.eventColor) {
-    try {
-      body.colorId = await client.closestEventColorId(data.eventColor)
-    } catch (error) { console.error('Google event palette unavailable', error) }
-  }
+  if (data.eventColor) body.colorId = closestEventColorId(data.eventColor)
   let remote
   let oldColor: string | null = null
   if (data.id) {

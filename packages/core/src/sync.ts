@@ -1,7 +1,7 @@
 import { and, eq, inArray, isNotNull, isNull, lte, ne, or, sql } from 'drizzle-orm';
 import { calendar, eventDecision, eventProjection, externalEvent, googleEvent, icsSource,
   syncJob, task, taskBlock, taskConnection, taskEstimate } from '@kairo/db/schema';
-import { DEFAULT_TASK_COLOR, GoogleApiError, type GoogleCalendarClient, type GoogleEvent, type IcsOccurrence, type NormalizedTask, type TaskPatch, type TaskSyncResult } from '@kairo/integrations';
+import { closestEventColorId, DEFAULT_TASK_COLOR, GoogleApiError, type GoogleCalendarClient, type GoogleEvent, type IcsOccurrence, type NormalizedTask, type TaskPatch, type TaskSyncResult } from '@kairo/integrations';
 
 type Db = any;
 const date = (value?: string) => value ? new Date(value) : null;
@@ -396,10 +396,9 @@ export async function reconcileTaskBlock(db: Db, blockId: string,
   if (!cal) return;
   const client = await clientForCalendar(cal.id);
   // The mirror is derived from the task, so Kairo's version always wins over remote edits.
-  const body: Partial<GoogleEvent> = { summary: linkedTask.content, description: 'Task blocked by Kairo', status: 'confirmed', start: { dateTime: block.startAt.toISOString() },
+  const body: Partial<GoogleEvent> = { summary: linkedTask.content, description: 'Task blocked by Kairo', status: 'confirmed',
+    colorId: closestEventColorId(linkedTask.projectColor ?? DEFAULT_TASK_COLOR), start: { dateTime: block.startAt.toISOString() },
     end: { dateTime: block.endAt.toISOString() }, extendedProperties: { private: { kairoTaskBlockId: block.id } } };
-  try { body.colorId = await client.closestEventColorId(linkedTask.projectColor ?? DEFAULT_TASK_COLOR); }
-  catch (error) { console.error('Google event palette unavailable', error); }
   const update = async (id: string) => { try { return await client.updateEvent(cal.googleCalendarId, id, body); } catch (error) { if (gone(error)) return undefined; throw error; } };
   let event = block.googleEventId ? await update(block.googleEventId) : undefined;
   if (!event) {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { GoogleCalendarClient, syncGoogleEvents } from './google/index.js';
+import { closestEventColorId, GoogleCalendarClient, syncGoogleEvents } from './google/index.js';
 import { parseIcs } from './ics/index.js';
 import { createTodoistProvider, exchangeTodoistCode, floatingToInstant, instantToFloating, refreshTodoistToken, syncTodoist, todoistAuthorizationUrl } from './todoist/index.js';
 import { TaskPatchError } from './tasks.js';
@@ -88,9 +88,9 @@ test('Todoist provider sync normalizes dues, projects, and keeps the timezone in
   const provider = createTodoistProvider({ fetch: async (_input, init) => {
     const body = init?.body as URLSearchParams; bodies.push(body);
     return Response.json(body.get('sync_token') === '*' ? { sync_token: 's1', full_sync: true, user: { tz_info: { timezone: 'America/Chicago' } },
-      projects: [{ id: 'p', name: 'Home', color: 'berry_red' }], items: [
+      projects: [{ id: 'p', name: 'Home', color: 'berry_red' }, { id: 'in', name: 'Inbox', color: 'charcoal', inbox_project: true }], items: [
         { id: 'a', content: 'All day', project_id: 'p', due: { date: '2026-10-12', string: 'every day', is_recurring: true } },
-        { id: 'b', content: 'Floating', due: { date: '2026-10-12T09:00:00.000000', timezone: null, string: 'Oct 12 9am' } },
+        { id: 'b', content: 'Floating', project_id: 'in', due: { date: '2026-10-12T09:00:00.000000', timezone: null, string: 'Oct 12 9am' } },
         { id: 'c', content: 'Fixed', due: { date: '2026-10-12T14:00:00.000000Z', timezone: 'Europe/Madrid' }, duration: { amount: 2, unit: 'day' } }] }
       : { sync_token: 's2', full_sync: false, items: [{ id: 'd', content: 'Later', due: { date: '2026-10-13T09:00:00' } }] });
   } });
@@ -106,7 +106,7 @@ test('Todoist provider sync normalizes dues, projects, and keeps the timezone in
   assert.equal(first.tasks[2].durationMinutes, 2880);
   const second = await provider.sync('token', first.cursor);
   assert.equal(bodies[1].get('sync_token'), 's1');
-  await provider.sync('token', JSON.stringify({ v: 1, token: 's1', tz: null }));
+  await provider.sync('token', JSON.stringify({ v: 2, token: 's1', tz: null }));
   assert.equal(bodies[2].get('sync_token'), '*');
   assert.equal(second.tasks[0].due && 'dateTime' in second.tasks[0].due && second.tasks[0].due.dateTime, '2026-10-13T14:00:00.000Z');
 });
@@ -154,4 +154,12 @@ test('Todoist command errors surface as patch errors', async () => {
     return Response.json({ sync_status: { [command.uuid]: { error: 'Item not found', error_code: 22, http_code: 404 } } });
   } });
   await assert.rejects(() => provider.update('token', 'missing', { title: 'x' }), TaskPatchError);
+});
+
+test('Google event colors match on hue, and greys go to Graphite', () => {
+  assert.equal(closestEventColorId('#808080'), '8'); // Todoist charcoal
+  assert.equal(closestEventColorId('#b8b8b8'), '8'); // Todoist grey
+  assert.equal(closestEventColorId('#f22420'), '11'); // Kairo's default task red → Tomato
+  assert.equal(closestEventColorId('#4073ff'), '9'); // Todoist blue → Blueberry
+  assert.equal(closestEventColorId('#299438'), '10'); // Todoist green → Basil
 });

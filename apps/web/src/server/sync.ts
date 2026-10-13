@@ -1,7 +1,7 @@
 import { and, eq, isNotNull } from 'drizzle-orm'
 import { db, accountAccess, calendar, connectedAccount, googleEvent, icsSource, task, taskConnection, userCalendarSetting } from '@kairo/db'
 import { applyGoogleSnapshot, applyIcsSnapshot, applyTaskSync, clearPendingFields, enqueueJob, finishJob, leaseJobs, pushPendingPatch, reconcileProjection, reconcileTaskBlock, syncTaskBlocks } from '@kairo/core'
-import { createTodoistProvider, fetchIcs, GoogleCalendarClient, parseIcs, refreshGoogleToken, syncGoogleEvents, TODOIST_SCOPE, type TaskProvider, type TodoistOAuthToken } from '@kairo/integrations'
+import { createTodoistProvider, fetchIcs, GOOGLE_EVENT_COLORS, GoogleCalendarClient, parseIcs, refreshGoogleToken, syncGoogleEvents, TODOIST_SCOPE, type TaskProvider, type TodoistOAuthToken } from '@kairo/integrations'
 import { decryptJson, encryptJson, googleCredentials, todoistCredentials } from './credentials'
 
 type StoredGoogle = { accessToken: string; refreshToken: string; expiresAt: number }
@@ -68,15 +68,11 @@ export async function syncGoogleCalendar(calendarId: string) {
       const previous = await db.select({ googleEventId: googleEvent.googleEventId, colorId: googleEvent.colorId, color: googleEvent.color }).from(googleEvent).where(eq(googleEvent.calendarId, cal.id))
       const previousById = new Map(previous.map((item) => [item.googleEventId, item]))
       await applyGoogleSnapshot(db, cal.id, events, cursor, full)
-      if (events.some((item) => item.colorId)) {
-        try {
-          const palette = (await client.getColors()).event
-          for (const item of events) {
-            if (!item.colorId || !palette[item.colorId]) continue
-            const old = previousById.get(item.id)
-            if (!old?.color || old.colorId !== item.colorId) await db.update(googleEvent).set({ color: palette[item.colorId].background }).where(and(eq(googleEvent.calendarId, cal.id), eq(googleEvent.googleEventId, item.id)))
-          }
-        } catch (error) { console.error('Google color palette unavailable', error) }
+      for (const item of events) {
+        const color = item.colorId && GOOGLE_EVENT_COLORS[item.colorId]
+        if (!color) continue
+        const old = previousById.get(item.id)
+        if (!old?.color || old.colorId !== item.colorId) await db.update(googleEvent).set({ color }).where(and(eq(googleEvent.calendarId, cal.id), eq(googleEvent.googleEventId, item.id)))
       }
     })
   } catch (error) {
