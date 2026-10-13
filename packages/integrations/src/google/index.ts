@@ -13,6 +13,15 @@ export type GoogleTime = { date?: string; dateTime?: string; timeZone?: string }
 export type GoogleCalendar = { id: string; summary?: string; backgroundColor?: string; colorId?: string; accessRole?: string; primary?: boolean; timeZone?: string };
 export type GoogleColors = { calendar: Record<string, { background: string; foreground: string }>;
   event: Record<string, { background: string; foreground: string }> };
+const rgb = (hex: string) => [1, 3, 5].map((index) => parseInt(hex.slice(index, index + 2), 16));
+/** Id of the palette color nearest to a #rrggbb hex, since Google events only take palette colors. */
+export function closestColorId(palette: GoogleColors['event'], hex: string) {
+  const target = rgb(hex);
+  return Object.entries(palette).map(([id, value]) => ({ id, distance: rgb(value.background).reduce((sum, part, index) => sum + (part - target[index]) ** 2, 0) }))
+    .sort((a, b) => a.distance - b.distance)[0]?.id;
+}
+// Google's event palette is fixed, so one fetch per process is enough.
+let eventPalette: Promise<GoogleColors['event']> | null = null;
 export class GoogleApiError extends Error {
   constructor(public status: number, message: string) { super(message); this.name = 'GoogleApiError'; }
 }
@@ -61,6 +70,10 @@ export class GoogleCalendarClient {
     return all;
   }
   getColors() { return this.request<GoogleColors>('/colors'); }
+  async closestEventColorId(hex: string) {
+    eventPalette ??= this.getColors().then((colors) => colors.event).catch((error) => { eventPalette = null; throw error; });
+    return closestColorId(await eventPalette, hex);
+  }
   async listRangeEvents(calendarId: string, start: Date, end: Date): Promise<GoogleEvent[]> {
     const all: GoogleEvent[] = []; let pageToken: string | undefined;
     do {

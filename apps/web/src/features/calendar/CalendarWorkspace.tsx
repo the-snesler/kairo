@@ -31,7 +31,7 @@ const colorPattern = /^#[0-9a-f]{6}$/i
 // Keep in sync with .cal-event-title / .cal-event-time line heights and the card's vertical chrome in calendar.css.
 const TITLE_LINE_HEIGHT = 14
 const TIMED_CARD_CHROME = 22
-const TASK_COLOR = '#f22420'
+const TASK_COLOR = '#f22420' // DEFAULT_TASK_COLOR in @kairo/integrations
 const EXTERNAL_GHOST_HEIGHT = 22
 
 function safeColor(value: string | undefined, fallback = '#7894a8') {

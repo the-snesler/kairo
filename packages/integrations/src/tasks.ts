@@ -25,6 +25,9 @@ export type NormalizedTask = {
   updatedAt: Date | null
 }
 
+// Color for tasks whose project has none. Keep in sync with TASK_COLOR in CalendarWorkspace.tsx.
+export const DEFAULT_TASK_COLOR = '#f22420'
+
 export type TaskProviderCapabilities = { dueTime: boolean, complete: boolean, edit: boolean }
 
 // What Kairo knows about the task's current provider due, so update() can skip a read.

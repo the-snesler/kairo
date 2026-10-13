@@ -244,11 +244,7 @@ export async function saveGoogleEventImpl(data: { id?: string; title: string; st
     end: data.allDay ? { date: data.end.slice(0, 10) } : { dateTime: data.end } }
   if (data.eventColor) {
     try {
-      const palette = (await client.getColors()).event
-      const rgb = (color: string) => [1, 3, 5].map((index) => parseInt(color.slice(index, index + 2), 16))
-      const target = rgb(data.eventColor)
-      const closest = Object.entries(palette).map(([id, value]) => ({ id, distance: rgb(value.background).reduce((sum, part, index) => sum + (part - target[index]) ** 2, 0) })).sort((a, b) => a.distance - b.distance)[0]
-      if (closest) body.colorId = closest.id
+      body.colorId = await client.closestEventColorId(data.eventColor)
     } catch (error) { console.error('Google event palette unavailable', error) }
   }
   let remote

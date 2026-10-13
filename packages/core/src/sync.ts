@@ -1,7 +1,7 @@
 import { and, eq, inArray, isNotNull, isNull, lte, ne, or, sql } from 'drizzle-orm';
 import { calendar, eventDecision, eventProjection, externalEvent, googleEvent, icsSource,
   syncJob, task, taskBlock, taskConnection, taskEstimate } from '@kairo/db/schema';
-import { GoogleApiError, type GoogleCalendarClient, type GoogleEvent, type IcsOccurrence, type NormalizedTask, type TaskPatch, type TaskSyncResult } from '@kairo/integrations';
+import { DEFAULT_TASK_COLOR, GoogleApiError, type GoogleCalendarClient, type GoogleEvent, type IcsOccurrence, type NormalizedTask, type TaskPatch, type TaskSyncResult } from '@kairo/integrations';
 
 type Db = any;
 const date = (value?: string) => value ? new Date(value) : null;
@@ -111,7 +111,7 @@ export function normalizedTaskValues(item: NormalizedTask) {
     providerUpdatedAt: item.updatedAt };
 }
 
-// Provider-agnostic apply. Returns ids of tasks whose title changed or that are new (their mirrors need a refresh).
+// Provider-agnostic apply. Returns ids of tasks whose title or color changed or that are new (their mirrors need a refresh).
 export async function applyTaskSync(db: Db, connectionId: string, result: TaskSyncResult): Promise<string[]> {
   return db.transaction((tx: Db) => {
     const now = new Date(); const touched: string[] = [];
@@ -131,11 +131,15 @@ export async function applyTaskSync(db: Db, connectionId: string, result: TaskSy
       for (const key of Object.keys(pending) as (keyof TaskPatch)[]) for (const column of pendingColumns[key] ?? []) delete values[column];
       if (existing) {
         tx.update(task).set(values).where(eq(task.id, existing.id)).run();
-        if (values.content !== undefined && values.content !== existing.content) touched.push(existing.id);
+        if ((values.content !== undefined && values.content !== existing.content) || values.projectColor !== existing.projectColor) touched.push(existing.id);
       } else touched.push(tx.insert(task).values({ ...values, connectionId, todoistId: item.externalId }).returning().get().id);
     }
-    for (const project of result.projects ?? [])
-      tx.update(task).set({ projectName: project.name, projectColor: project.color }).where(and(eq(task.connectionId, connectionId), eq(task.projectId, project.id))).run();
+    for (const project of result.projects ?? []) {
+      const inProject = and(eq(task.connectionId, connectionId), eq(task.projectId, project.id));
+      for (const row of tx.select({ id: task.id, projectColor: task.projectColor }).from(task).where(inProject).all() as { id: string, projectColor: string | null }[])
+        if (row.projectColor !== project.color && !touched.includes(row.id)) touched.push(row.id);
+      tx.update(task).set({ projectName: project.name, projectColor: project.color }).where(inProject).run();
+    }
     tx.update(taskConnection).set({ syncToken: result.cursor, status: 'ready', lastError: null,
       lastSyncedAt: now, updatedAt: now }).where(eq(taskConnection.id, connectionId)).run();
     return touched;
@@ -392,8 +396,10 @@ export async function reconcileTaskBlock(db: Db, blockId: string,
   if (!cal) return;
   const client = await clientForCalendar(cal.id);
   // The mirror is derived from the task, so Kairo's version always wins over remote edits.
-  const body: Partial<GoogleEvent> = { summary: linkedTask.content, status: 'confirmed', start: { dateTime: block.startAt.toISOString() },
+  const body: Partial<GoogleEvent> = { summary: linkedTask.content, description: 'Task blocked by Kairo', status: 'confirmed', start: { dateTime: block.startAt.toISOString() },
     end: { dateTime: block.endAt.toISOString() }, extendedProperties: { private: { kairoTaskBlockId: block.id } } };
+  try { body.colorId = await client.closestEventColorId(linkedTask.projectColor ?? DEFAULT_TASK_COLOR); }
+  catch (error) { console.error('Google event palette unavailable', error); }
   const update = async (id: string) => { try { return await client.updateEvent(cal.googleCalendarId, id, body); } catch (error) { if (gone(error)) return undefined; throw error; } };
   let event = block.googleEventId ? await update(block.googleEventId) : undefined;
   if (!event) {
