@@ -95,7 +95,8 @@ export function Combo<T>(props: ComboProps<T>) {
   const id = useId()
   useEffect(() => { if (!open) setText(props.display) }, [props.display, open])
   useLayoutEffect(() => {
-    if (!open || active < 0) return
+    // Wait for the menu's max-height to be applied, or "center" can't scroll anywhere yet.
+    if (!open || active < 0 || !menu.isPositioned) return
     list.current?.children[active]?.scrollIntoView({ block: centerNext.current ? 'center' : 'nearest' })
     centerNext.current = false
   }, [open, active, menu.isPositioned])

@@ -1,5 +1,4 @@
 .cal-workspace,
-.cal-editor,
 .cal-drag-ghost {
   --cal-surface: var(--color-canvas, #1a1d20);
   --cal-surface-raised: var(--color-elevated, #252a2e);
@@ -580,139 +579,6 @@ html.cal-drag-active.cal-drag-invalid * {
   font-size: 11px;
   padding-left: 5px;
 }
-.cal-editor {
-  background: var(--cal-surface-raised);
-  border: 1px solid var(--cal-line);
-  border-radius: 13px;
-  box-shadow: 0 18px 48px #0009;
-  box-sizing: border-box;
-  color: var(--cal-text);
-  max-height: min(680px, calc(100vh - 24px));
-  max-width: min(350px, calc(100vw - 24px));
-  overflow: auto;
-  width: 350px;
-  z-index: 100;
-}
-.cal-editor-head {
-  align-items: center;
-  border-bottom: 1px solid var(--cal-line);
-  display: flex;
-  justify-content: space-between;
-  padding: 13px 15px;
-}
-.cal-editor-head strong {
-  font-size: 14px;
-}
-.cal-editor-head button,
-.cal-delete {
-  background: transparent;
-  border: 0;
-  color: var(--cal-muted);
-  cursor: pointer;
-  display: grid;
-  height: 27px;
-  place-items: center;
-  width: 27px;
-}
-.cal-editor-body {
-  display: flex;
-  flex-direction: column;
-  gap: 11px;
-  padding: 14px;
-}
-.cal-editor-body label {
-  color: var(--cal-muted);
-  display: flex;
-  flex-direction: column;
-  font-size: 11px;
-  gap: 4px;
-}
-.cal-editor-body input,
-.cal-editor-body select,
-.cal-editor-body textarea {
-  background: color-mix(in srgb, var(--cal-surface-raised), black 18%);
-  border: 1px solid var(--cal-line);
-  border-radius: 7px;
-  box-sizing: border-box;
-  color: var(--cal-text);
-  min-height: 32px;
-  padding: 6px 8px;
-  width: 100%;
-}
-.cal-editor-body input:focus,
-.cal-editor-body select:focus,
-.cal-editor-body textarea:focus {
-  border-color: #8baafa;
-  outline: none;
-}
-.cal-editor-body input[type="color"] {
-  cursor: pointer;
-  max-width: 66px;
-  padding: 3px;
-}
-.cal-editor-body .cal-checkbox-label {
-  align-items: center;
-  flex-direction: row;
-  font-size: 12px;
-}
-.cal-editor-body .cal-checkbox-label input {
-  accent-color: #8a9fe8;
-  min-height: auto;
-  width: auto;
-}
-.cal-editor-times {
-  display: grid;
-  gap: 8px;
-  grid-template-columns: minmax(0, 1fr);
-}
-.cal-editor-note {
-  color: var(--cal-muted);
-  margin: 0;
-}
-.cal-editor-error {
-  color: #f2928d;
-  margin: 0;
-}
-.cal-editor-actions {
-  align-items: center;
-  border-top: 1px solid var(--cal-line);
-  display: flex;
-  justify-content: flex-end;
-  padding: 10px 13px;
-}
-.cal-save {
-  background: #8a9fe8;
-  border: 0;
-  border-radius: 7px;
-  color: #101625;
-  cursor: pointer;
-  font-weight: 650;
-  padding: 7px 13px;
-}
-.cal-save:disabled,
-.cal-delete:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-.cal-decisions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  width: 100%;
-}
-.cal-decisions button {
-  background: transparent;
-  border: 1px solid var(--cal-line);
-  border-radius: 7px;
-  color: var(--cal-text);
-  cursor: pointer;
-  flex: 1;
-  padding: 7px 6px;
-}
-.cal-decisions button.cal-selected {
-  background: #8a9fe826;
-  border-color: #8a9fe8;
-}
 .cal-mobile-add {
   display: none;
 }
@@ -803,12 +669,5 @@ html.cal-drag-active.cal-drag-invalid * {
     right: 18px;
     width: 46px;
     z-index: 20;
-  }
-  .cal-editor {
-    left: 12px !important;
-    max-width: calc(100vw - 24px);
-    position: fixed !important;
-    top: 12px !important;
-    width: calc(100vw - 24px);
   }
 }

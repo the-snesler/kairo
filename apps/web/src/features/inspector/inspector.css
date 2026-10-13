@@ -100,8 +100,8 @@
   gap: 8px;
   padding: 6px 12px 12px;
 }
-.insp-title {
-  background: #ffffff0a;
+.inspector .insp-title {
+  background: #ffffff10;
   border: 1px solid transparent;
   border-radius: 9px;
   flex: 1;
@@ -280,7 +280,7 @@ textarea.insp-text {
   gap: 2px;
   margin-left: -8px;
 }
-.insp-chip {
+.inspector .insp-chip {
   color: var(--insp-muted);
   cursor: pointer;
   display: inline-flex;
@@ -290,7 +290,7 @@ textarea.insp-text {
 .insp-chip svg {
   font-size: 14px;
 }
-.insp-chip.is-on {
+.inspector .insp-chip.is-on {
   color: var(--insp-text);
 }
 .insp-chip.is-on::before {
@@ -535,4 +535,13 @@ textarea.insp-text {
 }
 .insp-month-grid button.is-today.is-active {
   box-shadow: inset 0 0 0 2px #fff6;
+}
+
+@media (max-width: 700px) {
+  .inspector {
+    left: 12px !important;
+    top: 12px !important;
+    transform: none !important;
+    width: calc(100vw - 24px);
+  }
 }
