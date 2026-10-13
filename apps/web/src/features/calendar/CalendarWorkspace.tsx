@@ -1,4 +1,3 @@
-import { autoUpdate, flip, FloatingPortal, offset, shift, useDismiss, useFloating, useInteractions, useRole } from '@floating-ui/react'
 import { startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal, flushSync } from 'react-dom'
@@ -7,16 +6,18 @@ import IconChevronRight from '~icons/tabler/chevron-right'
 import IconChevronDown from '~icons/tabler/chevron-down'
 import IconPlus from '~icons/tabler/plus'
 import IconX from '~icons/tabler/x'
-import IconTrash from '~icons/tabler/trash'
 import IconCheck from '~icons/tabler/check'
-import { addDays, dayKey, eventIntersectsDay, formatDateTimeLocal, formatShortTime, formatTime, formatTimeRange, HOUR_HEIGHT, parseEventDate, sameDay, startOfDay, startOfWeek } from './date'
+import { addDays, dayKey, eventIntersectsDay, formatShortTime, formatTime, formatTimeRange, HOUR_HEIGHT, parseEventDate, sameDay, startOfDay, startOfWeek } from './date'
 import { inTopBar, normalizeTaskEvent, timedSegments } from './layout'
 import { onExternalDrag } from './dnd/external'
 import { MIN_DURATION_MINUTES, moveEvent, resizeEnd, resolveTarget, sameDue, taskDueForTarget, wallClock } from './dnd/geometry'
 import type { DropTarget, DropZone, ZoneHit } from './dnd/geometry'
 import { useCalendarDrag } from './dnd/useCalendarDrag'
 import type { DragSession } from './dnd/useCalendarDrag'
+import { EventPopover } from './EventPopover'
+import type { EventDraft } from './EventPopover'
 import type { CalendarEvent, CalendarView, CalendarWorkspaceProps, EventDecision } from './types'
+import type { InspectorAnchor } from '../inspector/fields'
 import { formatDuration } from '../tasks/grouping'
 import type { TaskSummary } from '../tasks/types'
 import './calendar.css'
@@ -78,9 +79,13 @@ function taskEvent(task: TaskSummary): CalendarEvent {
 
 
 interface EditorState {
-  event: CalendarEvent | null
-  draft: Omit<CalendarEvent, 'id'> | null
+  eventId: string | null
+  draft: EventDraft | null
+  anchor: InspectorAnchor
 }
+
+// Stand-in id for the event being created, so it previews on the calendar while the popover is open.
+const DRAFT_ID = 'draft'
 
 type DragData =
   | { type: 'move', item: CalendarEvent, originDay: string, zones: readonly DropZone[], grabMinutes: number, durationMinutes: number, compact: boolean, titleLines: number, timeLabel?: string }
@@ -195,9 +200,6 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
   const [internalDeclined, setInternalDeclined] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [editor, setEditor] = useState<EditorState | null>(null)
-  const [form, setForm] = useState({ title: '', start: '', end: '', allDay: false, calendarId: '', eventColor: '', description: '', location: '' })
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
   const [overrides, setOverrides] = useState<Record<string, CalendarEvent>>({})
   const [created, setCreated] = useState<CalendarEvent[]>([])
   const [deleted, setDeleted] = useState<string[]>([])
@@ -220,19 +222,20 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
     const scheduled = new Set(sourceEvents.map(event => event.taskId))
     // Optimistic task moves also cover tasks that were not on the calendar yet (dropped from the sidebar).
     const unscheduled = Object.values(taskOverrides).filter(event => !scheduled.has(event.taskId))
-    return [...sourceEvents, ...created, ...unscheduled].filter(event => !deleted.includes(event.id)).map(event => {
+    const draft: CalendarEvent[] = editor?.draft ? [{ ...editor.draft, id: DRAFT_ID, title: editor.draft.title || '(No title)', editable: false }] : []
+    return [...sourceEvents, ...created, ...unscheduled, ...draft].filter(event => !deleted.includes(event.id)).map(event => {
       const current = (event.kind === 'task' && event.taskId ? taskOverrides[event.taskId] : undefined) ?? overrides[event.id] ?? event
       const calendar = props.calendars?.find(item => item.id === current.calendarId)
       return calendar && current.decision && current.decision !== 'undecided' ? { ...current, calendarColor: calendar.color } : current
     }).filter(event => showDeclined || (!event.declined && event.status !== 'declined' && event.decision !== 'no'))
-  }, [sourceEvents, props.calendars, created, deleted, overrides, taskOverrides, showDeclined])
+  }, [sourceEvents, props.calendars, created, deleted, overrides, taskOverrides, showDeclined, editor?.draft])
 
   useEffect(() => { stripStartRef.current = stripStart }, [stripStart])
 
   useEffect(() => {
     setOverrides(current => {
       const next = { ...current }
-      for (const event of sourceEvents) if (next[event.id] && parseEventDate(next[event.id].start, next[event.id].allDay).getTime() === parseEventDate(event.start, event.allDay).getTime() && parseEventDate(next[event.id].end, next[event.id].allDay).getTime() === parseEventDate(event.end, event.allDay).getTime() && next[event.id].title === event.title && next[event.id].decision === event.decision && next[event.id].calendarId === event.calendarId && next[event.id].eventColor === event.eventColor) delete next[event.id]
+      for (const event of sourceEvents) if (next[event.id] && parseEventDate(next[event.id].start, next[event.id].allDay).getTime() === parseEventDate(event.start, event.allDay).getTime() && parseEventDate(next[event.id].end, next[event.id].allDay).getTime() === parseEventDate(event.end, event.allDay).getTime() && next[event.id].title === event.title && !!next[event.id].allDay === !!event.allDay && (next[event.id].description ?? '') === (event.description ?? '') && (next[event.id].location ?? '') === (event.location ?? '') && next[event.id].decision === event.decision && next[event.id].calendarId === event.calendarId && next[event.id].eventColor === event.eventColor) delete next[event.id]
       return Object.keys(next).length === Object.keys(current).length ? current : next
     })
     setTaskOverrides(current => {
@@ -357,77 +360,47 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
     }
   }
 
-  const floating = useFloating({ open: !!editor, onOpenChange: open => { if (!open) setEditor(null) }, placement: 'right-start', strategy: 'fixed', middleware: [offset(12), flip({ fallbackPlacements: ['left-start', 'bottom-start'] }), shift({ padding: 12 })], whileElementsMounted: autoUpdate })
-  const dismiss = useDismiss(floating.context)
-  const role = useRole(floating.context, { role: 'dialog' })
-  const { getFloatingProps } = useInteractions([dismiss, role])
-
-  const openEditor = (element: HTMLElement, event: CalendarEvent | null, draft: Omit<CalendarEvent, 'id'> | null = null) => {
+  const openEditor = (element: HTMLElement, event: CalendarEvent | null, draft: EventDraft | null = null) => {
+    if (event?.id === DRAFT_ID) return
     if (event?.kind === 'task') {
       if (event.taskId) props.onTaskOpen?.(event.taskId, element)
       return
     }
-    floating.refs.setReference(element)
-    const data = event ?? draft
-    if (!data) return
-    setForm({ title: data.title, start: formatDateTimeLocal(parseEventDate(data.start, data.allDay)), end: formatDateTimeLocal(parseEventDate(data.end, data.allDay)), allDay: !!data.allDay, calendarId: data.calendarId ?? props.calendars?.[0]?.id ?? '', eventColor: data.eventColor ?? '', description: data.description ?? '', location: data.location ?? '' })
-    setError('')
-    setEditor({ event, draft })
+    if (event || draft) setEditor({ eventId: event?.id ?? null, draft, anchor: element })
   }
 
   const createAt = (element: HTMLElement, day: Date, minutes: number, allDay = false) => {
     const start = addMinutes(day, allDay ? 0 : minutes)
     const end = allDay ? addDays(day, 1) : addMinutes(start, 60)
-    openEditor(element, null, { title: '', start: start.toISOString(), end: end.toISOString(), kind: 'google', allDay, calendarId: props.calendars?.[0]?.id, calendarColor: props.calendars?.[0]?.color })
+    const calendar = props.calendars?.[0]
+    const draft: EventDraft = { title: '', start: allDay ? dayKey(start) : start.toISOString(), end: allDay ? dayKey(end) : end.toISOString(), kind: 'google', allDay, calendarId: calendar?.id, calendarColor: calendar?.color }
+    // Timed drafts anchor to the clicked hour slot rather than the whole day column.
+    const anchor: InspectorAnchor = allDay ? element : { contextElement: element, getBoundingClientRect: () => { const box = element.getBoundingClientRect(); return new DOMRect(box.left, box.top + minutes / 60 * HOUR_HEIGHT, box.width, HOUR_HEIGHT) } }
+    setEditor({ eventId: null, draft, anchor })
   }
 
-  const save = async () => {
-    if (!editor || !form.title.trim()) return
-    const start = new Date(form.start)
-    const end = new Date(form.end)
-    if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || end <= start) { setError('End must be after start.'); return }
-    const calendar = props.calendars?.find(item => item.id === form.calendarId)
-    const patch = { title: form.title.trim(), start: form.allDay ? dayKey(start) : start.toISOString(), end: form.allDay ? dayKey(end) : end.toISOString(), allDay: form.allDay, calendarId: form.calendarId || undefined, calendarColor: calendar?.color, eventColor: form.eventColor || undefined, description: form.description, location: form.location }
-    setBusy(true)
-    setError('')
-    try {
-      if (editor.event) {
-        const updated = { ...editor.event, ...patch }
-        setOverrides(current => ({ ...current, [updated.id]: updated }))
-        await props.onEventChange?.(updated)
-      } else if (editor.draft) {
-        const draft = { ...editor.draft, ...patch }
-        const optimistic = { ...draft, id: `pending-${crypto.randomUUID()}` }
-        setCreated(current => [...current, optimistic])
-        try { await props.onEventCreate?.(draft) }
-        catch (cause) { setCreated(current => current.filter(item => item.id !== optimistic.id)); throw cause }
-      }
-      setEditor(null)
-    } catch (cause) {
-      if (editor.event) setOverrides(current => { const next = { ...current }; delete next[editor.event!.id]; return next })
-      setError(cause instanceof Error ? cause.message : 'Could not save event.')
-    } finally { setBusy(false) }
+  const createEvent = async (draft: EventDraft) => {
+    const optimistic = { ...draft, id: `pending-${crypto.randomUUID()}` }
+    setCreated(current => [...current, optimistic])
+    try { await props.onEventCreate?.(draft) }
+    catch (cause) { setCreated(current => current.filter(item => item.id !== optimistic.id)); throw cause }
   }
 
-  const remove = async () => {
-    if (!editor?.event) return
-    setBusy(true)
-    const event = editor.event
+  const deleteEvent = async (event: CalendarEvent) => {
     setDeleted(current => [...current, event.id])
-    try { await props.onEventDelete?.(event); setEditor(null) }
-    catch (cause) { setDeleted(current => current.filter(id => id !== event.id)); setError(cause instanceof Error ? cause.message : 'Could not delete event.') }
-    finally { setBusy(false) }
+    try { await props.onEventDelete?.(event) }
+    catch (cause) { setDeleted(current => current.filter(id => id !== event.id)); throw cause }
   }
 
-  const decide = async (decision: EventDecision) => {
-    if (!editor?.event) return
-    setBusy(true)
-    const event = editor.event
-    setOverrides(current => ({ ...current, [event.id]: { ...event, decision, calendarId: form.calendarId || event.calendarId } }))
-    try { await props.onDecisionChange?.(event, decision, form.calendarId || undefined); setEditor(null) }
-    catch (cause) { setOverrides(current => { const next = { ...current }; delete next[event.id]; return next }); setError(cause instanceof Error ? cause.message : 'Could not save decision.') }
-    finally { setBusy(false) }
+  const decide = async (event: CalendarEvent, decision: EventDecision, calendarId?: string) => {
+    setOverrides(current => ({ ...current, [event.id]: { ...event, decision, calendarId: calendarId || event.calendarId } }))
+    try { await props.onDecisionChange?.(event, decision, calendarId) }
+    catch (cause) { setOverrides(current => { const next = { ...current }; delete next[event.id]; return next }); throw cause }
   }
+
+  const editingEvent = editor?.eventId ? visibleEvents.find(event => event.id === editor.eventId) ?? null : null
+  // The event can vanish under an open popover (deleted elsewhere, or moved to another calendar and re-keyed).
+  useEffect(() => { if (editor?.eventId && !editingEvent) setEditor(null) }, [editor?.eventId, editingEvent])
 
   const canDrag = (event: CalendarEvent) => event.kind === 'task'
     ? event.editable !== false && !!event.taskId && !!props.onTaskChange
@@ -450,14 +423,27 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
     }
   }
 
+  // Saves run one at a time per event (each needs the etag the previous one produced); edits made meanwhile coalesce.
+  const eventSaves = useRef(new Map<string, CalendarEvent | null>())
   const commitEvent = async (changed: CalendarEvent) => {
     setOverrides(current => ({ ...current, [changed.id]: changed }))
     setDropError('')
-    try { await props.onEventChange?.(changed) }
-    catch (cause) {
-      setOverrides(current => { if (current[changed.id] !== changed) return current; const next = { ...current }; delete next[changed.id]; return next })
-      reportError(cause, 'Could not move event.')
+    const saves = eventSaves.current
+    const running = saves.has(changed.id)
+    saves.set(changed.id, changed)
+    if (running) return
+    for (let next = changed; ; ) {
+      try { await props.onEventChange?.(next) }
+      catch (cause) {
+        const failed = next
+        setOverrides(current => { if (current[failed.id] !== failed) return current; const rest = { ...current }; delete rest[failed.id]; return rest })
+        reportError(cause, 'Could not save event.')
+      }
+      const queued = saves.get(changed.id)
+      if (!queued || queued === next) break
+      next = queued
     }
+    saves.delete(changed.id)
   }
 
   const hitTest = (x: number, y: number): ZoneHit | null => {
@@ -964,224 +950,21 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
           </button>
         </div>
       )}
-      {editor && (
-        <FloatingPortal>
-          <div
-            ref={floating.refs.setFloating}
-            style={floating.floatingStyles}
-            {...getFloatingProps({
-              "className": "cal-editor",
-              "aria-label": editor.event ? "Edit event" : "New event",
-            })}
-          >
-            <div className="cal-editor-head">
-              <strong>
-                {editor.event
-                  ? editor.event.kind === "external"
-                    ? "Maybe event"
-                    : "Event"
-                  : "New event"}
-              </strong>
-              <button
-                type="button"
-                aria-label="Close"
-                onClick={() => setEditor(null)}
-              >
-                <IconX />
-              </button>
-            </div>
-            <div className="cal-editor-body">
-              <label>
-                Title
-                <input
-                  value={form.title}
-                  onChange={(e) =>
-                    setForm((current) => ({
-                      ...current,
-                      title: e.target.value,
-                    }))
-                  }
-                  readOnly={editor.event?.kind === "external"}
-                  autoFocus
-                />
-              </label>
-              <div className="cal-editor-times">
-                <label>
-                  Starts
-                  <input
-                    type="datetime-local"
-                    value={form.start}
-                    onChange={(e) =>
-                      setForm((current) => ({
-                        ...current,
-                        start: e.target.value,
-                      }))
-                    }
-                    readOnly={editor.event?.kind === "external"}
-                  />
-                </label>
-                <label>
-                  Ends
-                  <input
-                    type="datetime-local"
-                    value={form.end}
-                    onChange={(e) =>
-                      setForm((current) => ({
-                        ...current,
-                        end: e.target.value,
-                      }))
-                    }
-                    readOnly={editor.event?.kind === "external"}
-                  />
-                </label>
-              </div>
-              {editor.event?.kind !== "external" && (
-                <label className="cal-checkbox-label">
-                  <input
-                    type="checkbox"
-                    checked={form.allDay}
-                    onChange={(e) =>
-                      setForm((current) => ({
-                        ...current,
-                        allDay: e.target.checked,
-                      }))
-                    }
-                  />{" "}
-                  All day
-                </label>
-              )}
-              {props.calendars && props.calendars.length > 0 && (
-                <label>
-                  Calendar
-                  <select
-                    value={form.calendarId}
-                    onChange={(e) =>
-                      setForm((current) => ({
-                        ...current,
-                        calendarId: e.target.value,
-                      }))
-                    }
-                  >
-                    {props.calendars.map((calendar) => (
-                      <option key={calendar.id} value={calendar.id}>
-                        {calendar.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
-              {editor.event?.kind !== "external" && (
-                <>
-                  <label>
-                    Event color
-                    <input
-                      type="color"
-                      value={safeColor(
-                        form.eventColor,
-                        safeColor(editor.event?.eventColor, "#7894a8"),
-                      )}
-                      onChange={(e) =>
-                        setForm((current) => ({
-                          ...current,
-                          eventColor: e.target.value,
-                        }))
-                      }
-                    />
-                  </label>
-                  <label>
-                    Location
-                    <input
-                      value={form.location}
-                      onChange={(e) =>
-                        setForm((current) => ({
-                          ...current,
-                          location: e.target.value,
-                        }))
-                      }
-                    />
-                  </label>
-                  <label>
-                    Description
-                    <textarea
-                      rows={3}
-                      value={form.description}
-                      onChange={(e) =>
-                        setForm((current) => ({
-                          ...current,
-                          description: e.target.value,
-                        }))
-                      }
-                    />
-                  </label>
-                </>
-              )}
-              {editor.event?.recurring && (
-                <p className="cal-editor-note">
-                  Recurring events are read-only until instance and series
-                  editing are available.
-                </p>
-              )}
-              {error && (
-                <p className="cal-editor-error" role="alert">
-                  {error}
-                </p>
-              )}
-            </div>
-            <div className="cal-editor-actions">
-              {editor.event?.kind === "external" ? (
-                <div className="cal-decisions">
-                  {(["yes", "maybe", "no", "undecided"] as const).map(
-                    (decision) => (
-                      <button
-                        type="button"
-                        key={decision}
-                        disabled={busy || !props.onDecisionChange}
-                        className={
-                          editor.event?.decision === decision
-                            ? "cal-selected"
-                            : ""
-                        }
-                        onClick={() => decide(decision)}
-                      >
-                        {decision[0].toUpperCase() + decision.slice(1)}
-                      </button>
-                    ),
-                  )}
-                </div>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    className="cal-save"
-                    disabled={
-                      busy ||
-                      (!!editor.event && !canEdit(editor.event)) ||
-                      !form.title.trim() ||
-                      (!editor.event && !props.onEventCreate) ||
-                      (!!editor.event && !props.onEventChange)
-                    }
-                    onClick={save}
-                  >
-                    {busy ? "Saving…" : "Save"}
-                  </button>
-                  {editor.event && (
-                    <button
-                      type="button"
-                      className="cal-delete"
-                      disabled={
-                        busy || !props.onEventDelete || !canEdit(editor.event)
-                      }
-                      aria-label="Delete event"
-                      onClick={remove}
-                    >
-                      <IconTrash />
-                    </button>
-                  )}
-                </>
-              )}
-            </div>
-          </div>
-        </FloatingPortal>
+      {editor && (editingEvent || editor.draft) && (
+        <EventPopover
+          key={editor.eventId ?? "draft"}
+          event={editingEvent}
+          draft={editingEvent ? null : editor.draft}
+          anchor={editor.anchor}
+          calendars={props.calendars ?? []}
+          editable={!!editingEvent && canEdit(editingEvent) && !!props.onEventChange}
+          onClose={() => setEditor(null)}
+          onChange={(changed) => void commitEvent(changed)}
+          onDraftChange={(draft) => setEditor((current) => current && { ...current, draft })}
+          onCreate={props.onEventCreate ? createEvent : undefined}
+          onDelete={props.onEventDelete ? deleteEvent : undefined}
+          onDecide={props.onDecisionChange ? decide : undefined}
+        />
       )}
     </section>
   );

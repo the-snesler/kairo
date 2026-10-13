@@ -1,63 +1,60 @@
-import { autoUpdate, flip, FloatingPortal, offset, shift, useDismiss, useFloating, useInteractions, useRole } from '@floating-ui/react'
-import { format } from 'date-fns'
+import { FloatingPortal } from '@floating-ui/react'
+import { parseISO } from 'date-fns'
 import { useEffect, useRef, useState } from 'react'
-import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
+import IconArrowRight from '~icons/tabler/arrow-right'
 import IconCalendar from '~icons/tabler/calendar-event'
 import IconCheck from '~icons/tabler/check'
 import IconClock from '~icons/tabler/clock'
 import IconExternalLink from '~icons/tabler/external-link'
 import IconFlag from '~icons/tabler/flag-filled'
+import IconHash from '~icons/tabler/hash'
 import IconHourglass from '~icons/tabler/hourglass'
+import IconLock from '~icons/tabler/lock'
 import IconRepeat from '~icons/tabler/repeat'
 import IconX from '~icons/tabler/x'
+import { dayKey, minuteOfDay } from '../calendar/date'
 import { sameDue } from '../calendar/dnd/geometry'
-import { formatDuration } from './grouping'
+import { DateField, DurationField, EndTimeField, Row, TextField, TimeField, useInspector } from '../inspector/fields'
+import type { InspectorAnchor } from '../inspector/fields'
 import type { DurationSource, TaskDue, TaskPatch, TaskSummary } from './types'
-import './task-popover.css'
 
 export type TaskChange = TaskPatch & { durationMinutes?: number | null }
 
 export interface TaskPopoverProps {
   task: TaskSummary
-  anchor: HTMLElement
+  anchor: InspectorAnchor
   onClose: () => void
   onChange: (patch: TaskChange) => Promise<void>
   canEdit: boolean
 }
 
-const PRESETS = [15, 30, 45, 60, 90, 120]
 const SOURCE_LABEL: Record<DurationSource, string> = { user: 'Set by you', ai: 'AI estimate', provider: 'From Todoist', default: 'Default' }
 // Todoist API priority 4 is the UI's p1 (urgent).
 const PRIORITY_COLOR: Record<number, string> = { 4: '#ff7066', 3: '#ff9a14', 2: '#5297ff' }
+const DEFAULT_TIME = 9 * 60
 
 function dueParts(due: TaskDue | null) {
-  if (!due) return { date: '', time: '' }
-  if ('date' in due) return { date: due.date, time: '' }
-  const d = new Date(due.dateTime)
-  return { date: format(d, 'yyyy-MM-dd'), time: format(d, 'HH:mm') }
+  if (!due) return { date: null, minutes: null }
+  if ('date' in due) return { date: parseISO(due.date), minutes: null }
+  const date = new Date(due.dateTime)
+  return { date, minutes: minuteOfDay(date) }
 }
 
-function toDue(date: string, time: string): TaskDue {
-  return time ? { dateTime: new Date(`${date}T${time}`).toISOString() } : { date }
+function toDue(date: Date, minutes: number | null): TaskDue {
+  return minutes === null ? { date: dayKey(date) } : { dateTime: new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, minutes).toISOString() }
 }
-
 
 export function TaskPopover({ task, anchor, onClose, onChange, canEdit }: TaskPopoverProps) {
-  const floating = useFloating({ open: true, onOpenChange: open => { if (!open) onClose() }, elements: { reference: anchor }, placement: 'right-start', strategy: 'fixed', middleware: [offset(12), flip({ fallbackPlacements: ['left-start', 'bottom-start'] }), shift({ padding: 12 })], whileElementsMounted: autoUpdate })
-  const dismiss = useDismiss(floating.context)
-  const role = useRole(floating.context, { role: 'dialog' })
-  const { getFloatingProps } = useInteractions([dismiss, role])
-
-  const [title, setTitle] = useState(task.title)
-  const [date, setDate] = useState(() => dueParts(task.due).date)
-  const [time, setTime] = useState(() => dueParts(task.due).time)
-  const [custom, setCustom] = useState('')
+  const inspector = useInspector(anchor, onClose)
+  // Shown optimistically while a save is in flight; reset whenever the task itself changes.
+  const [due, setDue] = useState(task.due)
+  const [duration, setDuration] = useState(task.durationMinutes)
   const [completing, setCompleting] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  useEffect(() => { setTitle(task.title) }, [task.title])
   const dueKey = JSON.stringify(task.due)
-  useEffect(() => { const parts = dueParts(task.due); setDate(parts.date); setTime(parts.time) }, [dueKey])
+  useEffect(() => { setDue(task.due) }, [dueKey])
+  useEffect(() => { setDuration(task.durationMinutes) }, [task.durationMinutes])
 
   const locked = !canEdit || busy
   const inflight = useRef(false)
@@ -74,76 +71,74 @@ export function TaskPopover({ task, anchor, onClose, onChange, canEdit }: TaskPo
     if (await save({ completed: true })) onClose()
     else setCompleting(false)
   }
-  const commitTitle = () => {
-    const next = title.trim()
-    if (inflight.current) return
-    if (!next || next === task.title) return setTitle(task.title)
-    void save({ title: next }).then(ok => { if (!ok) setTitle(task.title) })
+  const changeDue = (next: TaskDue | null) => {
+    if (inflight.current || sameDue(next, task.due)) return
+    setDue(next)
+    void save({ due: next }).then(ok => { if (!ok) setDue(task.due) })
   }
-  const commitDue = (nextDate: string, nextTime: string) => {
-    const due = nextDate ? toDue(nextDate, nextTime) : null
-    if (inflight.current || sameDue(due, task.due)) return
-    void save({ due }).then(ok => { if (!ok) { const parts = dueParts(task.due); setDate(parts.date); setTime(parts.time) } })
-  }
-  const commitCustom = () => {
-    const minutes = Math.round(Number(custom))
-    setCustom('')
-    if (custom && minutes >= 5 && minutes <= 1440 && minutes !== task.durationMinutes) void save({ durationMinutes: minutes })
-  }
-  // Enter commits via blur; Escape reverts a dirty field (and only closes the popover when nothing is dirty).
-  const keys = (revert: () => void, dirty: boolean) => (e: ReactKeyboardEvent<HTMLInputElement>) => {
-    const input = e.currentTarget
-    if (e.key === 'Enter') { e.preventDefault(); input.blur() }
-    if (e.key === 'Escape' && dirty) { e.nativeEvent.stopPropagation(); revert(); requestAnimationFrame(() => input.blur()) }
+  const changeDuration = (minutes: number | null) => {
+    if (inflight.current || minutes === task.durationMinutes && task.durationSource === 'user') return
+    if (minutes !== null) setDuration(minutes)
+    void save({ durationMinutes: minutes }).then(ok => { if (!ok) setDuration(task.durationMinutes) })
   }
 
+  const { date, minutes } = dueParts(due)
+  const estimated = task.durationSource !== 'user'
   const priority = task.priority > 1 ? 5 - task.priority : null
   return <FloatingPortal>
-    <div ref={floating.refs.setFloating} style={floating.floatingStyles} {...getFloatingProps({ className: `task-popover${busy ? ' is-busy' : ''}`, 'aria-label': 'Task', 'aria-busy': busy })}>
-      <div className="task-pop-head">
-        <button type="button" className={`task-pop-check${completing ? ' is-done' : ''}`} role="checkbox" aria-checked={completing} aria-label="Complete task" disabled={locked} onClick={complete}><IconCheck /></button>
-        <input className={`task-pop-title${completing ? ' is-done' : ''}`} value={title} aria-label="Task title" readOnly={!canEdit} disabled={busy} onChange={e => setTitle(e.target.value)} onBlur={commitTitle}
-          onKeyDown={keys(() => setTitle(task.title), title !== task.title)} />
-        <button type="button" className="task-pop-close" aria-label="Close" onClick={onClose}><IconX /></button>
+    <div ref={inspector.ref} style={inspector.style} {...inspector.getFloatingProps({ className: `inspector${busy ? ' is-busy' : ''}`, 'aria-label': 'Task', 'aria-busy': busy })}>
+      <div className="insp-head">
+        <span className="insp-kind">Task{!canEdit && <small><IconLock /> Read only</small>}</span>
+        <button type="button" className="insp-icon-button" aria-label="Close" onClick={inspector.close}><IconX /></button>
       </div>
 
-      <div className="task-pop-body">
-        <div className="task-pop-row">
-          <IconCalendar className="task-pop-icon" />
-          <input type="date" aria-label="Due date" value={date} disabled={locked} onBlur={() => commitDue(date, time)}
-            // Typed years fire change per digit (0002, 0020…); only commit plausible dates immediately.
-            onChange={e => { const next = e.target.value; setDate(next); if (!next || +next.slice(0, 4) >= 1970) commitDue(next, next ? time : '') }} />
-          {date && (time
-            ? <span className="task-pop-time"><input type="time" aria-label="Due time" value={time} disabled={locked} onChange={e => setTime(e.target.value)} onBlur={() => commitDue(date, time)}
-                onKeyDown={keys(() => setTime(dueParts(task.due).time), time !== dueParts(task.due).time)} />
-              <button type="button" className="task-pop-icon-button" aria-label="Remove time" title="Remove time" disabled={locked} onClick={() => { setTime(''); commitDue(date, '') }}><IconX /></button></span>
-            : <button type="button" className="task-pop-link" disabled={locked} onClick={() => { setTime('09:00'); commitDue(date, '09:00') }}><IconClock /> Add time</button>)}
-          {task.due && <button type="button" className="task-pop-link task-pop-clear" disabled={locked} onClick={() => { setDate(''); setTime(''); commitDue('', '') }}>No date</button>}
-        </div>
-        {task.recurring && <p className="task-pop-note"><IconRepeat /> Repeats</p>}
+      <div className="insp-title-wrap">
+        <button type="button" className={`insp-check${completing ? ' is-done' : ''}`} role="checkbox" aria-checked={completing} aria-label="Complete task" disabled={locked} onClick={complete}><IconCheck /></button>
+        <TextField className={`insp-title${completing ? ' is-done' : ''}`} value={task.title} placeholder="Title" aria-label="Task title" readOnly={!canEdit} disabled={busy}
+          onCommit={title => title.trim() && title.trim() !== task.title && void save({ title: title.trim() })} />
+      </div>
 
-        <div className="task-pop-row task-pop-duration">
-          <IconHourglass className="task-pop-icon" />
-          <div className="task-pop-chips">
-            {PRESETS.map(minutes => <button type="button" key={minutes} className={task.durationMinutes === minutes ? 'is-selected' : ''} aria-pressed={task.durationMinutes === minutes} disabled={locked} onClick={() => minutes !== task.durationMinutes && save({ durationMinutes: minutes })}>{formatDuration(minutes)}</button>)}
-            <input type="number" min={5} max={1440} step={5} inputMode="numeric" aria-label="Custom duration in minutes" placeholder={PRESETS.includes(task.durationMinutes) ? 'min' : String(task.durationMinutes)} value={custom} disabled={locked}
-              onChange={e => setCustom(e.target.value)} onBlur={commitCustom} onKeyDown={keys(() => setCustom(''), !!custom)} />
+      <div className="insp-section">
+        {date && minutes !== null && <Row icon={<IconClock />}>
+          <TimeField minutes={minutes} aria-label="Due time" disabled={locked} onCommit={next => changeDue(toDue(date, next))} />
+          <IconArrowRight className="insp-arrow" />
+          <EndTimeField startMinutes={minutes} duration={duration} aria-label="End time" disabled={locked} onCommit={length => changeDuration(length)} />
+        </Row>}
+        <Row icon={minutes === null ? <IconCalendar /> : undefined}>
+          <DateField value={date} placeholder="No date" aria-label="Due date" disabled={locked} onCommit={day => changeDue(toDue(day, minutes))} />
+        </Row>
+        <Row>
+          <div className="insp-chips">
+            {date && <button type="button" className={`insp-chip${minutes === null ? ' is-on' : ''}`} aria-pressed={minutes === null} disabled={locked}
+              onClick={() => changeDue(toDue(date, minutes === null ? DEFAULT_TIME : null))}>All-day</button>}
+            {date && <button type="button" className="insp-chip" disabled={locked} onClick={() => changeDue(null)}>Clear date</button>}
+            {task.recurring && <span className="insp-chip is-static"><IconRepeat /> Repeats</span>}
           </div>
-        </div>
-        <p className="task-pop-source">
-          {task.durationSource === 'user' ? formatDuration(task.durationMinutes) : `~${formatDuration(task.durationMinutes)}`} · {SOURCE_LABEL[task.durationSource]}
-          {task.durationSource === 'user' && <button type="button" className="task-pop-link" disabled={locked} onClick={() => save({ durationMinutes: null })}>Reset</button>}
-        </p>
-
-        {!canEdit && <p className="task-pop-note">Reconnect Todoist to edit tasks</p>}
-        {error && <p className="task-pop-error" role="alert">{error}</p>}
+        </Row>
       </div>
 
-      <div className="task-pop-foot">
-        {task.projectName && <span className="task-pop-project" title={task.projectName}>{task.projectName}</span>}
-        {priority && <span className="task-pop-priority" style={{ color: PRIORITY_COLOR[task.priority] }}><IconFlag /> P{priority}</span>}
-        {task.pending && <span className="task-pop-pending">Syncing…</span>}
-        {task.url && <a className="task-pop-open" href={task.url} target="_blank" rel="noreferrer">Open in Todoist <IconExternalLink /></a>}
+      <div className="insp-section">
+        <Row icon={<IconHourglass />}>
+          <DurationField minutes={duration} prefix={estimated ? '~' : ''} aria-label="Duration" disabled={locked} onCommit={length => changeDuration(length)} />
+          <span className="insp-meta">{SOURCE_LABEL[task.durationSource]}</span>
+          {!estimated && <button type="button" className="insp-chip" disabled={locked} onClick={() => changeDuration(null)}>Reset</button>}
+        </Row>
+      </div>
+
+      {task.description && <div className="insp-section insp-description">
+        <TextField multiline value={task.description} aria-label="Description" readOnly onCommit={() => {}} />
+      </div>}
+
+      {!canEdit && <p className="insp-note"><IconLock /> Reconnect Todoist to edit tasks</p>}
+      {error && <p className="insp-error" role="alert">{error}</p>}
+
+      <div className="insp-foot">
+        <div className="insp-foot-meta">
+          {task.projectName && <span title={task.projectName}><IconHash /><span className="insp-truncate">{task.projectName}</span></span>}
+          {priority && <span style={{ color: PRIORITY_COLOR[task.priority], fontWeight: 650 }}><IconFlag /> P{priority}</span>}
+          {task.pending && <span><em>Syncing…</em></span>}
+        </div>
+        {task.url && <a className="insp-link" href={task.url} target="_blank" rel="noreferrer">Open in Todoist <IconExternalLink /></a>}
       </div>
     </div>
   </FloatingPortal>
