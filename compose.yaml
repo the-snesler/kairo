@@ -1,6 +1,7 @@
 services:
   kairo:
-    build: .
+    image: ghcr.io/the-snesler/kairo:latest
+    # build: .  # build locally instead of pulling the published image
     ports:
       - "3000:3000"
     env_file: .env
@@ -19,7 +20,8 @@ services:
     restart: unless-stopped
 
   worker:
-    build: .
+    image: ghcr.io/the-snesler/kairo:latest
+    # build: .  # build locally instead of pulling the published image
     command: ["pnpm", "worker"]
     env_file: .env
     environment:

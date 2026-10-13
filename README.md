@@ -16,8 +16,10 @@ In another terminal, run `pnpm worker` for background sync. Open `http://localho
 ## Docker
 
 ```sh
-docker compose up --build -d
+docker compose up -d
 ```
+
+This pulls the image CI publishes to `ghcr.io/the-snesler/kairo:latest` on every push to `main`. To build locally instead, swap `image:` for the commented `build: .` lines in `compose.yaml` and run `docker compose up --build -d`.
 
 The app and worker share the database in the `kairo-data` volume. Set `BETTER_AUTH_URL` to the exact HTTPS URL used in your browser when deploying behind a reverse proxy. Forward requests and response headers, including cookies and `Origin`, to port 3000. Serve HTTPS at the proxy; do not put this app directly on a public HTTP origin. Keep the encryption key and SQLite backup together; credentials cannot be decrypted without that key.
 

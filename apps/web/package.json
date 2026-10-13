@@ -7,7 +7,7 @@
     "build": "vite build",
     "start": "node .output/server/index.mjs",
     "worker": "tsx src/worker.ts",
-    "test": "DATABASE_URL=:memory: ENCRYPTION_KEY=test-only-encryption-key-with-at-least-32-chars tsx --test 'src/server/*.test.ts' 'src/features/**/*.test.ts'",
+    "test": "DATABASE_URL=:memory: ENCRYPTION_KEY=test-only-encryption-key-with-at-least-32-chars TODOIST_CLIENT_ID=test TODOIST_CLIENT_SECRET=test tsx --test 'src/server/*.test.ts' 'src/features/**/*.test.ts'",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
