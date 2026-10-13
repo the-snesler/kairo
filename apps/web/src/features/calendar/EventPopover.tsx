@@ -1,0 +1,188 @@
+import { differenceInCalendarDays } from 'date-fns'
+import { FloatingPortal } from '@floating-ui/react'
+import { useRef, useState } from 'react'
+import IconArrowRight from '~icons/tabler/arrow-right'
+import IconCalendar from '~icons/tabler/calendar-event'
+import IconClock from '~icons/tabler/clock'
+import IconLock from '~icons/tabler/lock'
+import IconMapPin from '~icons/tabler/map-pin'
+import IconPalette from '~icons/tabler/palette'
+import IconRepeat from '~icons/tabler/repeat'
+import IconTrash from '~icons/tabler/trash'
+import IconX from '~icons/tabler/x'
+import { Combo, DateField, EndTimeField, Row, TextField, TimeField, useInspector } from '../inspector/fields'
+import type { InspectorAnchor } from '../inspector/fields'
+import { formatDuration } from '../tasks/grouping'
+import { addDays, dayKey, minuteOfDay, parseEventDate, startOfDay } from './date'
+import type { CalendarEvent, CalendarOption, EventDecision } from './types'
+
+export type EventDraft = Omit<CalendarEvent, 'id'>
+
+export interface EventPopoverProps {
+  /** The event as currently shown on the calendar, or null while creating `draft`. */
+  event: CalendarEvent | null
+  draft: EventDraft | null
+  anchor: InspectorAnchor
+  calendars: CalendarOption[]
+  /** Whether `event` can be edited; edits are saved as they are made. */
+  editable: boolean
+  onClose: () => void
+  onChange: (event: CalendarEvent) => void
+  onDraftChange: (draft: EventDraft) => void
+  onCreate?: (draft: EventDraft) => Promise<void>
+  onDelete?: (event: CalendarEvent) => Promise<void>
+  onDecide?: (event: CalendarEvent, decision: EventDecision, calendarId?: string) => Promise<void>
+}
+
+// Google's event color ids, using the hex its colors API reports (what synced events render with). The server
+// snaps whatever we send to the nearest id, so these round-trip exactly.
+const EVENT_COLORS: [string, string][] = [
+  ['Tomato', '#dc2127'], ['Flamingo', '#ff887c'], ['Tangerine', '#ffb878'], ['Banana', '#fbd75b'], ['Sage', '#7ae7bf'], ['Basil', '#51b749'],
+  ['Peacock', '#46d6db'], ['Blueberry', '#5484ed'], ['Lavender', '#a4bdfc'], ['Grape', '#dbadff'], ['Graphite', '#e1e1e1'],
+]
+const DECISIONS: [EventDecision, string][] = [['yes', 'Yes'], ['maybe', 'Maybe'], ['no', 'No'], ['undecided', 'Undecided']]
+
+const atMinute = (day: Date, minutes: number) => new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, minutes)
+const addMinutes = (date: Date, minutes: number) => new Date(date.getTime() + minutes * 60_000)
+
+export function EventPopover(props: EventPopoverProps) {
+  const { event, draft, calendars } = props
+  const value = (event ?? draft)!
+  const external = event?.kind === 'external'
+  const editable = draft ? !!props.onCreate : props.editable
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [target, setTarget] = useState(value.calendarId ?? calendars[0]?.id ?? '')
+  const inspector = useInspector(props.anchor, props.onClose)
+
+  const start = parseEventDate(value.start, value.allDay)
+  const end = parseEventDate(value.end, value.allDay)
+  const duration = Math.round((end.getTime() - start.getTime()) / 60_000)
+  const lastDay = value.allDay ? addDays(end, -1) : startOfDay(addMinutes(end, -1))
+  const days = differenceInCalendarDays(lastDay, start) + 1
+  // Remembers the times to restore when All-day is switched back off.
+  const timed = useRef(value.allDay ? { minutes: 9 * 60, duration: 60 } : { minutes: minuteOfDay(start), duration })
+  if (!value.allDay) timed.current = { minutes: minuteOfDay(start), duration }
+
+  const update = (patch: Partial<CalendarEvent>) => {
+    if (!editable) return
+    setError('')
+    if (event) props.onChange({ ...event, ...patch })
+    else props.onDraftChange({ ...value, ...patch })
+  }
+  const moveStart = (next: Date) => update({ start: next.toISOString(), end: addMinutes(next, duration).toISOString() })
+  const setStartDate = (day: Date) => value.allDay
+    ? update({ start: dayKey(day), end: dayKey(addDays(day, days)) })
+    : moveStart(atMinute(day, minuteOfDay(start)))
+  const setEndDate = (day: Date) => {
+    if (value.allDay) return update(day < start ? { start: dayKey(day), end: dayKey(addDays(day, 1)) } : { end: dayKey(addDays(day, 1)) })
+    const next = atMinute(day, minuteOfDay(end))
+    if (next <= start) return setError('End must be after start.')
+    update({ end: next.toISOString() })
+  }
+  const toggleAllDay = () => {
+    if (value.allDay) {
+      const next = atMinute(start, timed.current.minutes)
+      update({ allDay: false, start: next.toISOString(), end: addMinutes(next, Math.min(timed.current.duration, 24 * 60)).toISOString() })
+    } else update({ allDay: true, start: dayKey(start), end: dayKey(addDays(lastDay, 1)) })
+  }
+
+  const run = async (action: () => Promise<void>, fallback: string) => {
+    setBusy(true); setError('')
+    try { await action(); props.onClose() }
+    catch (cause) { setError(cause instanceof Error ? cause.message : fallback) }
+    finally { setBusy(false) }
+  }
+  const create = () => { if (draft && props.onCreate && draft.title.trim() && !busy) void run(() => props.onCreate!({ ...draft, title: draft.title.trim() }), 'Could not create event.') }
+
+  const locked = !editable || busy
+  const calendar = calendars.find(item => item.id === (external ? target : value.calendarId))
+  const color = value.eventColor ?? calendar?.color
+  const preset = EVENT_COLORS.find(([, hex]) => hex === color?.toLowerCase())
+  const colorName = preset?.[0] ?? (color?.toLowerCase() === calendar?.color.toLowerCase() ? 'Calendar color' : 'Custom color')
+  const calendarOptions = calendars.map(item => ({ key: item.id, label: item.name, swatch: item.color, value: item }))
+  const colorOptions = EVENT_COLORS.map(([name, hex]) => ({ key: hex, label: name, swatch: hex, value: hex }))
+  const kind = draft ? 'New event' : external ? 'Maybe event' : 'Event'
+
+  return <FloatingPortal>
+    <div ref={inspector.ref} style={inspector.style} {...inspector.getFloatingProps({ className: `inspector${busy ? ' is-busy' : ''}`, 'aria-label': kind, 'aria-busy': busy })}>
+      <div className="insp-head">
+        <span className="insp-kind">{kind}{event && !editable && !external && <small><IconLock /> Read only</small>}</span>
+        {event && !external && props.onDelete && <button type="button" className="insp-icon-button is-danger" aria-label="Delete event" title="Delete event" disabled={locked}
+          onClick={() => void run(() => props.onDelete!(event), 'Could not delete event.')}><IconTrash /></button>}
+        <button type="button" className="insp-icon-button" aria-label="Close" onClick={inspector.close}><IconX /></button>
+      </div>
+
+      <div className="insp-title-wrap">
+        {draft
+          ? <input className="insp-title" value={draft.title} placeholder="Title" aria-label="Title" autoFocus disabled={busy}
+              onChange={e => props.onDraftChange({ ...draft, title: e.target.value })} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); create() } }} />
+          : <TextField className="insp-title" value={value.title} placeholder="Title" aria-label="Title" readOnly={locked}
+              onCommit={title => title.trim() && update({ title: title.trim() })} />}
+      </div>
+
+      <div className="insp-section">
+        {value.allDay
+          ? <Row icon={<IconCalendar />}>
+              <DateField value={start} aria-label="Start date" disabled={locked} onCommit={setStartDate} />
+              <IconArrowRight className="insp-arrow" />
+              <DateField value={lastDay} aria-label="End date" disabled={locked} onCommit={setEndDate} />
+              {days > 1 && <span className="insp-meta">{days} days</span>}
+            </Row>
+          : <>
+              <Row icon={<IconClock />}>
+                <TimeField minutes={minuteOfDay(start)} aria-label="Start time" disabled={locked} onCommit={minutes => moveStart(atMinute(start, minutes))} />
+                <IconArrowRight className="insp-arrow" />
+                <EndTimeField startMinutes={minuteOfDay(start)} duration={duration} aria-label="End time" disabled={locked} onCommit={length => update({ end: addMinutes(start, length).toISOString() })} />
+                <span className="insp-meta">{formatDuration(duration)}</span>
+              </Row>
+              <Row>
+                <DateField value={start} aria-label={days > 1 ? 'Start date' : 'Date'} disabled={locked} onCommit={setStartDate} />
+                {days > 1 && <><IconArrowRight className="insp-arrow" /><DateField value={lastDay} aria-label="End date" disabled={locked} onCommit={setEndDate} /></>}
+              </Row>
+            </>}
+        <Row>
+          <div className="insp-chips">
+            <button type="button" className={`insp-chip${value.allDay ? ' is-on' : ''}`} aria-pressed={!!value.allDay} disabled={locked} onClick={toggleAllDay}>All-day</button>
+            {value.recurring && <span className="insp-chip is-static"><IconRepeat /> Repeats</span>}
+          </div>
+        </Row>
+      </div>
+
+      {(!locked || value.location) && <div className="insp-section">
+        <Row icon={<IconMapPin />}>
+          <TextField value={value.location ?? ''} placeholder="Location" aria-label="Location" readOnly={locked} onCommit={location => update({ location })} />
+        </Row>
+      </div>}
+
+      {(!locked || value.description) && <div className="insp-section insp-description">
+        <TextField multiline value={value.description ?? ''} placeholder="Description" aria-label="Description" readOnly={locked} onCommit={description => update({ description })} />
+      </div>}
+
+      {calendars.length > 0 && <div className="insp-section">
+        <Row icon={<span className="insp-swatch" style={{ background: calendar?.color ?? value.calendarColor }} />}>
+          <Combo display={calendar?.name ?? 'Calendar'} aria-label={external ? 'Copy to calendar' : 'Calendar'} options={calendarOptions} selectedKey={calendar?.id}
+            disabled={external ? busy || !props.onDecide : locked}
+            onCommit={item => external ? setTarget(item.id) : update({ calendarId: item.id, calendarColor: item.color })} />
+        </Row>
+        {!external && <Row icon={<IconPalette style={{ color }} />}>
+          <Combo display={colorName} aria-label="Event color" options={colorOptions} selectedKey={preset?.[1]} disabled={locked} onCommit={eventColor => update({ eventColor })} />
+        </Row>}
+      </div>}
+
+      {value.recurring && <p className="insp-note"><IconLock /> Recurring events are read-only for now.</p>}
+      {error && <p className="insp-error" role="alert">{error}</p>}
+
+      {draft && <div className="insp-foot">
+        <span className="insp-foot-meta">{busy ? 'Creating…' : 'Press Enter to create'}</span>
+        <button type="button" className="insp-primary" disabled={busy || !draft.title.trim() || !props.onCreate} onClick={create}>Create</button>
+      </div>}
+      {event && external && <div className="insp-foot">
+        <div className="insp-segmented" role="group" aria-label="Attending?">
+          {DECISIONS.map(([decision, label]) => <button type="button" key={decision} className={event.decision === decision ? 'is-selected' : ''} aria-pressed={event.decision === decision} disabled={busy || !props.onDecide}
+            onClick={() => void run(() => props.onDecide!(event, decision, target || undefined), 'Could not save decision.')}>{label}</button>)}
+        </div>
+      </div>}
+    </div>
+  </FloatingPortal>
+}
