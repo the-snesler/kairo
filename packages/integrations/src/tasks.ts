@@ -17,7 +17,7 @@ export type NormalizedTask = {
   projectName: string | null
   projectColor: string | null // hex
   priority: number
-  due: (TaskDue & { timeZone?: string | null, string?: string | null, recurring?: boolean }) | null
+  due: (TaskDue & { timeZone?: string | null; string?: string | null; recurring?: boolean }) | null
   durationMinutes: number | null
   completed: boolean
   completedAt?: Date | null
@@ -28,15 +28,15 @@ export type NormalizedTask = {
 // Color for tasks whose project has none. Keep in sync with TASK_COLOR in CalendarWorkspace.tsx.
 export const DEFAULT_TASK_COLOR = '#f22420'
 
-export type TaskProviderCapabilities = { dueTime: boolean, complete: boolean, edit: boolean }
+export type TaskProviderCapabilities = { dueTime: boolean; complete: boolean; edit: boolean }
 
 // What Kairo knows about the task's current provider due, so update() can skip a read.
 export type TaskUpdateContext = {
-  current?: { timed: boolean, recurring: boolean, string: string | null, timeZone: string | null } | null
+  current?: { timed: boolean; recurring: boolean; string: string | null; timeZone: string | null } | null
   cursor?: string | null
 }
 
-export type TaskTokens = { accessToken: string, refreshToken?: string, expiresIn: number, scope?: string }
+export type TaskTokens = { accessToken: string; refreshToken?: string; expiresIn: number; scope?: string }
 
 // How a failed provider call should be handled: refresh and retry, reconnect, give up on the edit, or retry later.
 export type TaskErrorKind = 'unauthorized' | 'invalid-grant' | 'forbidden' | 'rejected' | 'transient'
@@ -55,9 +55,17 @@ export interface TaskProvider {
 }
 
 // `projects` lists projects seen in this sync so stored tasks can be renamed/recolored without being resent.
-export type TaskSyncResult = { tasks: NormalizedTask[], cursor: string, full: boolean, projects?: { id: string, name: string, color: string | null }[] }
+export type TaskSyncResult = {
+  tasks: NormalizedTask[]
+  cursor: string
+  full: boolean
+  projects?: { id: string; name: string; color: string | null }[]
+}
 
 // A patch the provider refused for good (validation, unsupported edit). Retrying will not help.
 export class TaskPatchError extends Error {
-  constructor(message: string) { super(message); this.name = 'TaskPatchError' }
+  constructor(message: string) {
+    super(message)
+    this.name = 'TaskPatchError'
+  }
 }

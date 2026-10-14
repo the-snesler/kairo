@@ -15,9 +15,23 @@ export const Route = createRootRoute({
 })
 
 function Root() {
-  return <Document><Outlet /></Document>
+  return (
+    <Document>
+      <Outlet />
+    </Document>
+  )
 }
 
 function Document({ children }: { children: ReactNode }) {
-  return <html lang="en"><head><HeadContent /></head><body>{children}<Scripts /></body></html>
+  return (
+    <html lang="en">
+      <head>
+        <HeadContent />
+      </head>
+      <body>
+        {children}
+        <Scripts />
+      </body>
+    </html>
+  )
 }

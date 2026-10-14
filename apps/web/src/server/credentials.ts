@@ -13,7 +13,12 @@ export function encryptJson(value: unknown): string {
   const nonce = randomBytes(12)
   const cipher = createCipheriv('aes-256-gcm', key(), nonce)
   const body = Buffer.concat([cipher.update(JSON.stringify(value), 'utf8'), cipher.final()])
-  return ['v1', nonce.toString('base64url'), cipher.getAuthTag().toString('base64url'), body.toString('base64url')].join('.')
+  return [
+    'v1',
+    nonce.toString('base64url'),
+    cipher.getAuthTag().toString('base64url'),
+    body.toString('base64url'),
+  ].join('.')
 }
 
 export function decryptJson<T>(value: string): T {
@@ -21,7 +26,9 @@ export function decryptJson<T>(value: string): T {
   if (version !== 'v1' || !nonce || !tag || !body) throw new Error('Unsupported encrypted credential format')
   const decipher = createDecipheriv('aes-256-gcm', key(), Buffer.from(nonce, 'base64url'))
   decipher.setAuthTag(Buffer.from(tag, 'base64url'))
-  return JSON.parse(Buffer.concat([decipher.update(Buffer.from(body, 'base64url')), decipher.final()]).toString('utf8')) as T
+  return JSON.parse(
+    Buffer.concat([decipher.update(Buffer.from(body, 'base64url')), decipher.final()]).toString('utf8'),
+  ) as T
 }
 
 function projectRoot() {
@@ -35,19 +42,29 @@ export function googleCredentials(): GoogleCredentials {
   if ((!clientId || !clientSecret) && process.env.GOOGLE_OAUTH_CLIENT_FILE) {
     const filename = process.env.GOOGLE_OAUTH_CLIENT_FILE
     const path = isAbsolute(filename) ? filename : resolve(projectRoot(), filename)
-    const file = JSON.parse(readFileSync(path, 'utf8')) as { web?: { client_id?: string; client_secret?: string }; installed?: { client_id?: string; client_secret?: string } }
+    const file = JSON.parse(readFileSync(path, 'utf8')) as {
+      web?: { client_id?: string; client_secret?: string }
+      installed?: { client_id?: string; client_secret?: string }
+    }
     const source = file.web ?? file.installed
     clientId ||= source?.client_id
     clientSecret ||= source?.client_secret
   }
   if (!clientId || !clientSecret) throw new Error('Google OAuth client credentials are missing')
-  return { clientId, clientSecret, redirectUri: new URL('/api/google/callback', process.env.BETTER_AUTH_URL || 'http://localhost:3000').toString() }
+  return {
+    clientId,
+    clientSecret,
+    redirectUri: new URL('/api/google/callback', process.env.BETTER_AUTH_URL || 'http://localhost:3000').toString(),
+  }
 }
 
 export function todoistCredentials(): TodoistOAuthCredentials {
   const clientId = process.env.TODOIST_CLIENT_ID
   const clientSecret = process.env.TODOIST_CLIENT_SECRET
   if (!clientId || !clientSecret) throw new Error('Todoist OAuth client credentials are missing')
-  return { clientId, clientSecret,
-    redirectUri: new URL('/api/todoist/callback', process.env.BETTER_AUTH_URL || 'http://localhost:3000').toString() }
+  return {
+    clientId,
+    clientSecret,
+    redirectUri: new URL('/api/todoist/callback', process.env.BETTER_AUTH_URL || 'http://localhost:3000').toString(),
+  }
 }

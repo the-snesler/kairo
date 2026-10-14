@@ -7,10 +7,30 @@ import IconChevronDown from '~icons/tabler/chevron-down'
 import IconPlus from '~icons/tabler/plus'
 import IconX from '~icons/tabler/x'
 import IconCheck from '~icons/tabler/check'
-import { addDays, dayKey, eventIntersectsDay, formatShortTime, formatTime, formatTimeRange, HOUR_HEIGHT, parseEventDate, sameDay, startOfDay, startOfWeek } from './date'
+import {
+  addDays,
+  dayKey,
+  eventIntersectsDay,
+  formatShortTime,
+  formatTime,
+  formatTimeRange,
+  HOUR_HEIGHT,
+  parseEventDate,
+  sameDay,
+  startOfDay,
+  startOfWeek,
+} from './date'
 import { inTopBar, normalizeTaskEvent, timedSegments } from './layout'
 import { onExternalDrag } from './dnd/external'
-import { MIN_DURATION_MINUTES, moveEvent, resizeEnd, resolveTarget, sameDue, taskDueForTarget, wallClock } from './dnd/geometry'
+import {
+  MIN_DURATION_MINUTES,
+  moveEvent,
+  resizeEnd,
+  resolveTarget,
+  sameDue,
+  taskDueForTarget,
+  wallClock,
+} from './dnd/geometry'
 import type { DropTarget, DropZone, ZoneHit } from './dnd/geometry'
 import { useCalendarDrag } from './dnd/useCalendarDrag'
 import type { DragSession } from './dnd/useCalendarDrag'
@@ -44,18 +64,19 @@ function addMinutes(date: Date, minutes: number) {
 }
 
 function eventStyle(event: CalendarEvent, past: boolean): CSSProperties {
-  const calendar = event.kind === 'task' ? safeColor(event.task?.color ?? undefined, TASK_COLOR) : safeColor(event.calendarColor)
+  const calendar =
+    event.kind === 'task' ? safeColor(event.task?.color ?? undefined, TASK_COLOR) : safeColor(event.calendarColor)
   const eventColor = safeColor(event.eventColor, calendar)
   return {
-    "--calendar-color": calendar,
-    "--event-color": eventColor,
-    "--event-body":
-      event.kind === "external" && event.decision !== 'yes' && event.decision !== 'maybe'
-        ? "transparent"
-        : event.kind === "task"
-          ? `color-mix(in srgb, ${eventColor} ${past ? "10%" : "18%"}, var(--cal-surface))`
-          : `color-mix(in srgb, ${eventColor} ${past ? "23%" : "45%"}, var(--cal-surface))`,
-  } as CSSProperties;
+    '--calendar-color': calendar,
+    '--event-color': eventColor,
+    '--event-body':
+      event.kind === 'external' && event.decision !== 'yes' && event.decision !== 'maybe'
+        ? 'transparent'
+        : event.kind === 'task'
+          ? `color-mix(in srgb, ${eventColor} ${past ? '10%' : '18%'}, var(--cal-surface))`
+          : `color-mix(in srgb, ${eventColor} ${past ? '23%' : '45%'}, var(--cal-surface))`,
+  } as CSSProperties
 }
 
 function isDashed(event: CalendarEvent) {
@@ -68,15 +89,25 @@ function canEdit(event: CalendarEvent) {
 
 function eventMinutes(event: CalendarEvent) {
   if (event.kind === 'task' && event.task) return event.task.durationMinutes
-  return Math.round((parseEventDate(event.end, event.allDay).getTime() - parseEventDate(event.start, event.allDay).getTime()) / 60_000)
+  return Math.round(
+    (parseEventDate(event.end, event.allDay).getTime() - parseEventDate(event.start, event.allDay).getTime()) / 60_000,
+  )
 }
 
 /** Calendar card for a task that is not (yet) on the calendar, e.g. dragged in from the sidebar. */
 function taskEvent(task: TaskSummary): CalendarEvent {
   const placeholder = dayKey(new Date())
-  return normalizeTaskEvent({ id: `task-${task.id}`, title: task.title, kind: 'task', taskId: task.id, task, start: placeholder, end: placeholder, allDay: true })
+  return normalizeTaskEvent({
+    id: `task-${task.id}`,
+    title: task.title,
+    kind: 'task',
+    taskId: task.id,
+    task,
+    start: placeholder,
+    end: placeholder,
+    allDay: true,
+  })
 }
-
 
 interface EditorState {
   eventId: string | null
@@ -88,8 +119,27 @@ interface EditorState {
 const DRAFT_ID = 'draft'
 
 type DragData =
-  | { type: 'move', item: CalendarEvent, originDay: string, zones: readonly DropZone[], grabMinutes: number, durationMinutes: number, compact: boolean, titleLines: number, timeLabel?: string }
-  | { type: 'resize', item: CalendarEvent, day: string, startMinutes: number, wrapper: HTMLElement, column: HTMLElement, bottomGap: number, height: string }
+  | {
+      type: 'move'
+      item: CalendarEvent
+      originDay: string
+      zones: readonly DropZone[]
+      grabMinutes: number
+      durationMinutes: number
+      compact: boolean
+      titleLines: number
+      timeLabel?: string
+    }
+  | {
+      type: 'resize'
+      item: CalendarEvent
+      day: string
+      startMinutes: number
+      wrapper: HTMLElement
+      column: HTMLElement
+      bottomGap: number
+      height: string
+    }
 
 function EventCard({
   event,
@@ -104,60 +154,52 @@ function EventCard({
   onPointerDown,
   onToggleComplete,
 }: {
-  event: CalendarEvent;
-  compact?: boolean;
+  event: CalendarEvent
+  compact?: boolean
   /** Title lines that fit above the time row; 0 lays title and time out on a single line. */
-  titleLines?: number;
+  titleLines?: number
   /** Shares its row with overlapping events: a one-line card gives the time's space to the title. */
-  narrow?: boolean;
-  past: boolean;
-  draggable?: boolean;
+  narrow?: boolean
+  past: boolean
+  draggable?: boolean
   /** The original card while a drag of it is in progress. */
-  dragging?: boolean;
+  dragging?: boolean
   /** Replaces the computed time text. */
-  timeLabel?: string;
-  onOpen?: (element: HTMLElement, event: CalendarEvent) => void;
-  onPointerDown?: (
-    event: ReactPointerEvent<HTMLElement>,
-    item: CalendarEvent,
-    resize: boolean,
-  ) => void;
-  onToggleComplete?: (event: CalendarEvent) => void;
+  timeLabel?: string
+  onOpen?: (element: HTMLElement, event: CalendarEvent) => void
+  onPointerDown?: (event: ReactPointerEvent<HTMLElement>, item: CalendarEvent, resize: boolean) => void
+  onToggleComplete?: (event: CalendarEvent) => void
 }) {
-  const start = parseEventDate(event.start, event.allDay);
-  const end = parseEventDate(event.end, event.allDay);
-  const inline = compact || titleLines < 1;
-  const task = event.kind === "task";
-  const committed = event.kind === 'external' && (event.decision === 'yes' || event.decision === 'maybe');
-  const tentative = event.kind === 'external' && event.decision === 'maybe';
-  const completed = !!event.task?.completed;
-  const time = timeLabel ?? (inTopBar(event)
-    ? ""
-    : inline
-      ? formatShortTime(start)
-      : formatTimeRange(start, end));
-  const showTime = !!time && !(narrow && inline && timeLabel === undefined);
+  const start = parseEventDate(event.start, event.allDay)
+  const end = parseEventDate(event.end, event.allDay)
+  const inline = compact || titleLines < 1
+  const task = event.kind === 'task'
+  const committed = event.kind === 'external' && (event.decision === 'yes' || event.decision === 'maybe')
+  const tentative = event.kind === 'external' && event.decision === 'maybe'
+  const completed = !!event.task?.completed
+  const time = timeLabel ?? (inTopBar(event) ? '' : inline ? formatShortTime(start) : formatTimeRange(start, end))
+  const showTime = !!time && !(narrow && inline && timeLabel === undefined)
   return (
     <div
-      className={`cal-event ${compact ? "cal-event-compact" : ""} ${inline ? "cal-event-inline" : ""} ${isDashed(event) ? "cal-event-dashed" : ""} ${committed ? "cal-event-committed" : ""} ${tentative ? "cal-event-tentative" : ""} ${event.declined ? "cal-event-declined" : ""} ${task ? "cal-event-task" : ""} ${completed ? "cal-event-completed" : ""} ${event.task?.pending ? "cal-event-pending" : ""} ${past ? "cal-event-past" : ""} ${draggable ? "cal-event-draggable" : ""} ${dragging ? "cal-event-dragging" : ""}`}
+      className={`cal-event ${compact ? 'cal-event-compact' : ''} ${inline ? 'cal-event-inline' : ''} ${isDashed(event) ? 'cal-event-dashed' : ''} ${committed ? 'cal-event-committed' : ''} ${tentative ? 'cal-event-tentative' : ''} ${event.declined ? 'cal-event-declined' : ''} ${task ? 'cal-event-task' : ''} ${completed ? 'cal-event-completed' : ''} ${event.task?.pending ? 'cal-event-pending' : ''} ${past ? 'cal-event-past' : ''} ${draggable ? 'cal-event-draggable' : ''} ${dragging ? 'cal-event-dragging' : ''}`}
       style={
         {
           ...eventStyle(event, past),
-          "--title-lines": Math.max(titleLines, 1),
+          '--title-lines': Math.max(titleLines, 1),
         } as CSSProperties
       }
       role="button"
       tabIndex={0}
-      aria-label={`${task ? "Task: " : ""}${event.title}${time ? `, ${time}` : ""}`}
+      aria-label={`${task ? 'Task: ' : ''}${event.title}${time ? `, ${time}` : ''}`}
       onClick={(e) => {
-        e.stopPropagation();
-        onOpen?.(e.currentTarget, event);
+        e.stopPropagation()
+        onOpen?.(e.currentTarget, event)
       }}
       onDoubleClick={(e) => e.stopPropagation()}
       onKeyDown={(e) => {
-        if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
-          e.preventDefault();
-          onOpen?.(e.currentTarget, event);
+        if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
+          e.preventDefault()
+          onOpen?.(e.currentTarget, event)
         }
       }}
       onPointerDown={(e) => onPointerDown?.(e, event, false)}
@@ -167,13 +209,13 @@ function EventCard({
           <button
             type="button"
             className="cal-task-check"
-            aria-label={completed ? "Mark task incomplete" : "Complete task"}
+            aria-label={completed ? 'Mark task incomplete' : 'Complete task'}
             aria-pressed={completed}
             disabled={!onToggleComplete}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => {
-              e.stopPropagation();
-              onToggleComplete?.(event);
+              e.stopPropagation()
+              onToggleComplete?.(event)
             }}
           >
             {completed && <IconCheck aria-hidden="true" />}
@@ -187,13 +229,13 @@ function EventCard({
           className="cal-event-resize"
           role="presentation"
           onPointerDown={(e) => {
-            e.stopPropagation();
-            onPointerDown(e, event, true);
+            e.stopPropagation()
+            onPointerDown(e, event, true)
           }}
         />
       )}
     </div>
-  );
+  )
 }
 
 export function CalendarWorkspace(props: CalendarWorkspaceProps) {
@@ -207,7 +249,9 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
   const [deleted, setDeleted] = useState<string[]>([])
   const [taskOverrides, setTaskOverrides] = useState<Record<string, CalendarEvent>>({})
   const [dropError, setDropError] = useState('')
-  const [stripStart, setStripStart] = useState(() => addDays(startOfWeek(props.date ?? props.initialDate ?? new Date()), -14))
+  const [stripStart, setStripStart] = useState(() =>
+    addDays(startOfWeek(props.date ?? props.initialDate ?? new Date()), -14),
+  )
   const [columnWidth, setColumnWidth] = useState(160)
   const scroller = useRef<HTMLDivElement>(null)
   const timeline = useRef<HTMLDivElement>(null)
@@ -221,46 +265,93 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
   const today = startOfDay(new Date())
   const sourceEvents = useMemo(() => props.events.map(normalizeTaskEvent), [props.events])
   const visibleEvents = useMemo(() => {
-    const scheduled = new Set(sourceEvents.map(event => event.taskId))
+    const scheduled = new Set(sourceEvents.map((event) => event.taskId))
     // Optimistic task moves also cover tasks that were not on the calendar yet (dropped from the sidebar).
-    const unscheduled = Object.values(taskOverrides).filter(event => !scheduled.has(event.taskId))
-    const draft: CalendarEvent[] = editor?.draft ? [{ ...editor.draft, id: DRAFT_ID, title: editor.draft.title || '(No title)', editable: false }] : []
-    return [...sourceEvents, ...created, ...unscheduled, ...draft].filter(event => !deleted.includes(event.id)).map(event => {
-      const current = (event.kind === 'task' && event.taskId ? taskOverrides[event.taskId] : undefined) ?? overrides[event.id] ?? event
-      const calendar = props.calendars?.find(item => item.id === current.calendarId)
-      return calendar && current.decision && current.decision !== 'undecided' ? { ...current, calendarColor: calendar.color } : current
-    }).filter(event => showDeclined || (!event.declined && event.status !== 'declined' && event.decision !== 'no'))
+    const unscheduled = Object.values(taskOverrides).filter((event) => !scheduled.has(event.taskId))
+    const draft: CalendarEvent[] = editor?.draft
+      ? [{ ...editor.draft, id: DRAFT_ID, title: editor.draft.title || '(No title)', editable: false }]
+      : []
+    return [...sourceEvents, ...created, ...unscheduled, ...draft]
+      .filter((event) => !deleted.includes(event.id))
+      .map((event) => {
+        const current =
+          (event.kind === 'task' && event.taskId ? taskOverrides[event.taskId] : undefined) ??
+          overrides[event.id] ??
+          event
+        const calendar = props.calendars?.find((item) => item.id === current.calendarId)
+        return calendar && current.decision && current.decision !== 'undecided'
+          ? { ...current, calendarColor: calendar.color }
+          : current
+      })
+      .filter((event) => showDeclined || (!event.declined && event.status !== 'declined' && event.decision !== 'no'))
   }, [sourceEvents, props.calendars, created, deleted, overrides, taskOverrides, showDeclined, editor?.draft])
 
-  useEffect(() => { stripStartRef.current = stripStart }, [stripStart])
+  useEffect(() => {
+    stripStartRef.current = stripStart
+  }, [stripStart])
 
   useEffect(() => {
-    setOverrides(current => {
+    setOverrides((current) => {
       const next = { ...current }
-      for (const event of sourceEvents) if (next[event.id] && parseEventDate(next[event.id].start, next[event.id].allDay).getTime() === parseEventDate(event.start, event.allDay).getTime() && parseEventDate(next[event.id].end, next[event.id].allDay).getTime() === parseEventDate(event.end, event.allDay).getTime() && next[event.id].title === event.title && !!next[event.id].allDay === !!event.allDay && (next[event.id].description ?? '') === (event.description ?? '') && (next[event.id].location ?? '') === (event.location ?? '') && next[event.id].decision === event.decision && next[event.id].calendarId === event.calendarId && next[event.id].eventColor === event.eventColor) delete next[event.id]
+      for (const event of sourceEvents)
+        if (
+          next[event.id] &&
+          parseEventDate(next[event.id].start, next[event.id].allDay).getTime() ===
+            parseEventDate(event.start, event.allDay).getTime() &&
+          parseEventDate(next[event.id].end, next[event.id].allDay).getTime() ===
+            parseEventDate(event.end, event.allDay).getTime() &&
+          next[event.id].title === event.title &&
+          !!next[event.id].allDay === !!event.allDay &&
+          (next[event.id].description ?? '') === (event.description ?? '') &&
+          (next[event.id].location ?? '') === (event.location ?? '') &&
+          next[event.id].decision === event.decision &&
+          next[event.id].calendarId === event.calendarId &&
+          next[event.id].eventColor === event.eventColor
+        )
+          delete next[event.id]
       return Object.keys(next).length === Object.keys(current).length ? current : next
     })
-    setTaskOverrides(current => {
+    setTaskOverrides((current) => {
       const next = { ...current }
       for (const event of sourceEvents) {
         const pending = event.taskId ? next[event.taskId] : undefined
-        if (pending && event.kind === 'task' && sameDue(pending.task?.due, event.task?.due) && pending.task?.durationMinutes === event.task?.durationMinutes) delete next[event.taskId!]
+        if (
+          pending &&
+          event.kind === 'task' &&
+          sameDue(pending.task?.due, event.task?.due) &&
+          pending.task?.durationMinutes === event.task?.durationMinutes
+        )
+          delete next[event.taskId!]
       }
       return Object.keys(next).length === Object.keys(current).length ? current : next
     })
   }, [sourceEvents])
 
   useEffect(() => {
-    setCreated(current => current.filter(draft => !sourceEvents.some(event => event.title === draft.title && parseEventDate(event.start, event.allDay).getTime() === parseEventDate(draft.start, draft.allDay).getTime() && parseEventDate(event.end, event.allDay).getTime() === parseEventDate(draft.end, draft.allDay).getTime())))
-    setDeleted(current => current.filter(id => props.events.some(event => event.id === id)))
+    setCreated((current) =>
+      current.filter(
+        (draft) =>
+          !sourceEvents.some(
+            (event) =>
+              event.title === draft.title &&
+              parseEventDate(event.start, event.allDay).getTime() ===
+                parseEventDate(draft.start, draft.allDay).getTime() &&
+              parseEventDate(event.end, event.allDay).getTime() === parseEventDate(draft.end, draft.allDay).getTime(),
+          ),
+      ),
+    )
+    setDeleted((current) => current.filter((id) => props.events.some((event) => event.id === id)))
   }, [props.events, sourceEvents])
 
-  const setDate = useCallback((next: Date) => {
-    const normalized = startOfDay(next)
-    dateRef.current = dayKey(normalized)
-    if (props.date === undefined) setInternalDate(normalized)
-    props.onDateChange?.(normalized)
-  }, [props.date, props.onDateChange])
+  const setDate = useCallback(
+    (next: Date) => {
+      const normalized = startOfDay(next)
+      dateRef.current = dayKey(normalized)
+      if (props.date === undefined) setInternalDate(normalized)
+      props.onDateChange?.(normalized)
+    },
+    [props.date, props.onDateChange],
+  )
 
   const setView = (next: CalendarView) => {
     if (props.view === undefined) setInternalView(next)
@@ -268,16 +359,20 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
     setMenuOpen(false)
   }
 
-  const reportDays = useCallback((first: Date, count: number) => {
-    const days = Array.from({ length: count }, (_, i) => addDays(first, i))
-    props.onVisibleDaysChange?.(days)
-    props.onVisibleRangeChange?.(first, addDays(first, count))
-  }, [props.onVisibleDaysChange, props.onVisibleRangeChange])
+  const reportDays = useCallback(
+    (first: Date, count: number) => {
+      const days = Array.from({ length: count }, (_, i) => addDays(first, i))
+      props.onVisibleDaysChange?.(days)
+      props.onVisibleRangeChange?.(first, addDays(first, count))
+    },
+    [props.onVisibleDaysChange, props.onVisibleRangeChange],
+  )
 
   useLayoutEffect(() => {
     const node = scroller.current
     if (!node || view === 'month') return
-    const resize = () => setColumnWidth(Math.max(view === 'day' ? node.clientWidth : node.clientWidth / 7, view === 'day' ? 320 : 128))
+    const resize = () =>
+      setColumnWidth(Math.max(view === 'day' ? node.clientWidth : node.clientWidth / 7, view === 'day' ? 320 : 128))
     resize()
     const observer = new ResizeObserver(resize)
     observer.observe(node)
@@ -295,14 +390,14 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
     if (!node.scrollTop) node.scrollTop = HOUR_HEIGHT * 6
     if (hourLabels.current) hourLabels.current.style.transform = `translateY(-${node.scrollTop}px)`
     reportDays(first, view === 'day' ? 1 : 7)
-  // A date supplied by the shell is ignored when it matches the current left day.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // A date supplied by the shell is ignored when it matches the current left day.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, columnWidth])
 
   useEffect(() => {
     if (view === 'month') reportDays(startOfWeek(new Date(date.getFullYear(), date.getMonth(), 1)), 42)
-  // Month range changes are reported by navigation and controlled date effects.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Month range changes are reported by navigation and controlled date effects.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view])
 
   useEffect(() => {
@@ -331,14 +426,18 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
       flushSync(() => setStripStart(stripStartRef.current))
       node.scrollLeft -= shiftDays * columnWidth
     }
-    if (dayKey(first) !== dateRef.current) startTransition(() => {
-      setDate(first)
-      reportDays(first, view === 'week' ? 7 : 1)
-    })
+    if (dayKey(first) !== dateRef.current)
+      startTransition(() => {
+        setDate(first)
+        reportDays(first, view === 'week' ? 7 : 1)
+      })
   }
 
   const navigate = (direction: number) => {
-    const next = view === 'month' ? new Date(date.getFullYear(), date.getMonth() + direction, 1) : addDays(date, direction * (view === 'week' ? 7 : 1))
+    const next =
+      view === 'month'
+        ? new Date(date.getFullYear(), date.getMonth() + direction, 1)
+        : addDays(date, direction * (view === 'week' ? 7 : 1))
     setDate(next)
     if (view === 'month') reportDays(startOfWeek(new Date(next.getFullYear(), next.getMonth(), 1)), 42)
     else {
@@ -375,52 +474,97 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
     const start = addMinutes(day, allDay ? 0 : minutes)
     const end = allDay ? addDays(day, 1) : addMinutes(start, 60)
     const calendar = props.calendars?.[0]
-    const draft: EventDraft = { title: '', start: allDay ? dayKey(start) : start.toISOString(), end: allDay ? dayKey(end) : end.toISOString(), kind: 'google', allDay, calendarId: calendar?.id, calendarColor: calendar?.color }
+    const draft: EventDraft = {
+      title: '',
+      start: allDay ? dayKey(start) : start.toISOString(),
+      end: allDay ? dayKey(end) : end.toISOString(),
+      kind: 'google',
+      allDay,
+      calendarId: calendar?.id,
+      calendarColor: calendar?.color,
+    }
     // Timed drafts anchor to the clicked hour slot rather than the whole day column.
-    const anchor: InspectorAnchor = allDay ? element : { contextElement: element, getBoundingClientRect: () => { const box = element.getBoundingClientRect(); return new DOMRect(box.left, box.top + minutes / 60 * HOUR_HEIGHT, box.width, HOUR_HEIGHT) } }
+    const anchor: InspectorAnchor = allDay
+      ? element
+      : {
+          contextElement: element,
+          getBoundingClientRect: () => {
+            const box = element.getBoundingClientRect()
+            return new DOMRect(box.left, box.top + (minutes / 60) * HOUR_HEIGHT, box.width, HOUR_HEIGHT)
+          },
+        }
     setEditor({ eventId: null, draft, anchor })
   }
 
   const createEvent = async (draft: EventDraft) => {
     const optimistic = { ...draft, id: `pending-${crypto.randomUUID()}` }
-    setCreated(current => [...current, optimistic])
-    try { await props.onEventCreate?.(draft) }
-    catch (cause) { setCreated(current => current.filter(item => item.id !== optimistic.id)); throw cause }
+    setCreated((current) => [...current, optimistic])
+    try {
+      await props.onEventCreate?.(draft)
+    } catch (cause) {
+      setCreated((current) => current.filter((item) => item.id !== optimistic.id))
+      throw cause
+    }
   }
 
   const deleteEvent = async (event: CalendarEvent) => {
-    setDeleted(current => [...current, event.id])
-    try { await props.onEventDelete?.(event) }
-    catch (cause) { setDeleted(current => current.filter(id => id !== event.id)); throw cause }
+    setDeleted((current) => [...current, event.id])
+    try {
+      await props.onEventDelete?.(event)
+    } catch (cause) {
+      setDeleted((current) => current.filter((id) => id !== event.id))
+      throw cause
+    }
   }
 
   const decide = async (event: CalendarEvent, decision: EventDecision, calendarId?: string) => {
-    setOverrides(current => ({ ...current, [event.id]: { ...event, decision, calendarId: calendarId || event.calendarId } }))
-    try { await props.onDecisionChange?.(event, decision, calendarId) }
-    catch (cause) { setOverrides(current => { const next = { ...current }; delete next[event.id]; return next }); throw cause }
+    setOverrides((current) => ({
+      ...current,
+      [event.id]: { ...event, decision, calendarId: calendarId || event.calendarId },
+    }))
+    try {
+      await props.onDecisionChange?.(event, decision, calendarId)
+    } catch (cause) {
+      setOverrides((current) => {
+        const next = { ...current }
+        delete next[event.id]
+        return next
+      })
+      throw cause
+    }
   }
 
-  const editingEvent = editor?.eventId ? visibleEvents.find(event => event.id === editor.eventId) ?? null : null
+  const editingEvent = editor?.eventId ? (visibleEvents.find((event) => event.id === editor.eventId) ?? null) : null
   // The event can vanish under an open popover (deleted elsewhere, or moved to another calendar and re-keyed).
-  useEffect(() => { if (editor?.eventId && !editingEvent) setEditor(null) }, [editor?.eventId, editingEvent])
+  useEffect(() => {
+    if (editor?.eventId && !editingEvent) setEditor(null)
+  }, [editor?.eventId, editingEvent])
 
-  const canDrag = (event: CalendarEvent) => event.kind === 'task'
-    ? event.editable !== false && !!event.taskId && !!props.onTaskChange
-    : canEdit(event) && !!props.onEventChange
+  const canDrag = (event: CalendarEvent) =>
+    event.kind === 'task'
+      ? event.editable !== false && !!event.taskId && !!props.onTaskChange
+      : canEdit(event) && !!props.onEventChange
 
-  const reportError = (cause: unknown, fallback: string) => setDropError(cause instanceof Error ? cause.message : fallback)
+  const reportError = (cause: unknown, fallback: string) =>
+    setDropError(cause instanceof Error ? cause.message : fallback)
 
   /** Optimistically applies a task change, then rolls back if the parent rejects it. */
-  const commitTask = async (item: CalendarEvent, patch: { due?: TaskSummary['due'], durationMinutes?: number }) => {
+  const commitTask = async (item: CalendarEvent, patch: { due?: TaskSummary['due']; durationMinutes?: number }) => {
     const task = item.task
     if (!task || !item.taskId) return
     const taskId = item.taskId
     const optimistic = normalizeTaskEvent({ ...item, task: { ...task, ...patch } })
-    setTaskOverrides(current => ({ ...current, [taskId]: optimistic }))
+    setTaskOverrides((current) => ({ ...current, [taskId]: optimistic }))
     setDropError('')
-    try { await props.onTaskChange?.(taskId, patch) }
-    catch (cause) {
-      setTaskOverrides(current => { if (current[taskId] !== optimistic) return current; const next = { ...current }; delete next[taskId]; return next })
+    try {
+      await props.onTaskChange?.(taskId, patch)
+    } catch (cause) {
+      setTaskOverrides((current) => {
+        if (current[taskId] !== optimistic) return current
+        const next = { ...current }
+        delete next[taskId]
+        return next
+      })
       reportError(cause, 'Could not update task.')
     }
   }
@@ -428,17 +572,23 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
   // Saves run one at a time per event (each needs the etag the previous one produced); edits made meanwhile coalesce.
   const eventSaves = useRef(new Map<string, CalendarEvent | null>())
   const commitEvent = async (changed: CalendarEvent) => {
-    setOverrides(current => ({ ...current, [changed.id]: changed }))
+    setOverrides((current) => ({ ...current, [changed.id]: changed }))
     setDropError('')
     const saves = eventSaves.current
     const running = saves.has(changed.id)
     saves.set(changed.id, changed)
     if (running) return
-    for (let next = changed; ; ) {
-      try { await props.onEventChange?.(next) }
-      catch (cause) {
+    for (let next = changed; ;) {
+      try {
+        await props.onEventChange?.(next)
+      } catch (cause) {
         const failed = next
-        setOverrides(current => { if (current[failed.id] !== failed) return current; const rest = { ...current }; delete rest[failed.id]; return rest })
+        setOverrides((current) => {
+          if (current[failed.id] !== failed) return current
+          const rest = { ...current }
+          delete rest[failed.id]
+          return rest
+        })
         reportError(cause, 'Could not save event.')
       }
       const queued = saves.get(changed.id)
@@ -455,20 +605,30 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
   }
 
   const drag = useCalendarDrag<DragData>({
-    cursor: session => session.data.type === 'resize' ? 'resize' : 'move',
+    cursor: (session) => (session.data.type === 'resize' ? 'resize' : 'move'),
     resolve: ({ data, x, y }) => {
       if (data.type === 'resize') {
         const rect = data.column.getBoundingClientRect()
-        return { zone: 'timed', day: data.day, minutes: data.startMinutes, endMinutes: resizeEnd(y, rect.top, HOUR_HEIGHT, data.startMinutes) }
+        return {
+          zone: 'timed',
+          day: data.day,
+          minutes: data.startMinutes,
+          endMinutes: resizeEnd(y, rect.top, HOUR_HEIGHT, data.startMinutes),
+        }
       }
-      return resolveTarget(hitTest(x, y), y, { hourHeight: HOUR_HEIGHT, grabMinutes: data.grabMinutes, durationMinutes: data.durationMinutes, zones: data.zones })
+      return resolveTarget(hitTest(x, y), y, {
+        hourHeight: HOUR_HEIGHT,
+        grabMinutes: data.grabMinutes,
+        durationMinutes: data.durationMinutes,
+        zones: data.zones,
+      })
     },
     onFrame: ({ data, y }) => {
       if (data.type !== 'resize') return
       // The card's bottom edge follows the pointer; the snapped end is shown by the preview.
       const top = data.wrapper.getBoundingClientRect().top
       const columnBottom = data.column.getBoundingClientRect().bottom
-      data.wrapper.style.height = `${Math.max(MIN_DURATION_MINUTES / 60 * HOUR_HEIGHT, Math.min(columnBottom, y + data.bottomGap) - top)}px`
+      data.wrapper.style.height = `${Math.max((MIN_DURATION_MINUTES / 60) * HOUR_HEIGHT, Math.min(columnBottom, y + data.bottomGap) - top)}px`
     },
     onFinish: ({ data }) => {
       if (data.type === 'resize') data.wrapper.style.height = data.height
@@ -494,7 +654,8 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
         return
       }
       const moved = moveEvent(item, target, data.originDay)
-      if (parseEventDate(moved.start, moved.allDay).getTime() !== parseEventDate(item.start, item.allDay).getTime()) void commitEvent({ ...item, ...moved })
+      if (parseEventDate(moved.start, moved.allDay).getTime() !== parseEventDate(item.start, item.allDay).getTime())
+        void commitEvent({ ...item, ...moved })
     },
     scrollArea: ({ data }) => {
       const element = scroller.current
@@ -516,8 +677,21 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
       const wrapper = target.closest<HTMLElement>('.cal-event-position')
       if (!wrapper || zone.dataset.dropZone !== 'timed') return
       const box = wrapper.getBoundingClientRect()
-      const startMinutes = Math.round((box.top - zone.getBoundingClientRect().top) / HOUR_HEIGHT * 60)
-      drag.begin({ type: 'resize', item: event, day, startMinutes, wrapper, column: zone, bottomGap: box.bottom - e.clientY, height: wrapper.style.height }, e.nativeEvent, { grabX: 0, grabY: 0, width: box.width, height: box.height })
+      const startMinutes = Math.round(((box.top - zone.getBoundingClientRect().top) / HOUR_HEIGHT) * 60)
+      drag.begin(
+        {
+          type: 'resize',
+          item: event,
+          day,
+          startMinutes,
+          wrapper,
+          column: zone,
+          bottomGap: box.bottom - e.clientY,
+          height: wrapper.style.height,
+        },
+        e.nativeEvent,
+        { grabX: 0, grabY: 0, width: box.width, height: box.height },
+      )
       return
     }
     const card = target.closest<HTMLElement>('.cal-event') ?? target
@@ -525,42 +699,70 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
     const compact = zone.dataset.dropZone !== 'timed'
     const timedZones: readonly DropZone[] = ['timed', 'month']
     const dayZones: readonly DropZone[] = ['allday', 'month']
-    drag.begin({
-      type: 'move', item: event, originDay: day,
-      zones: event.kind === 'task' ? ['timed', 'allday', 'month'] : inTopBar(event) ? dayZones : timedZones,
-      grabMinutes: (e.clientY - box.top) / HOUR_HEIGHT * 60,
-      durationMinutes: eventMinutes(event), compact,
-      titleLines: compact ? 0 : Math.floor((box.height - TIMED_CARD_CHROME) / TITLE_LINE_HEIGHT),
-    }, e.nativeEvent, { grabX: e.clientX - box.left, grabY: e.clientY - box.top, width: box.width, height: box.height })
+    drag.begin(
+      {
+        type: 'move',
+        item: event,
+        originDay: day,
+        zones: event.kind === 'task' ? ['timed', 'allday', 'month'] : inTopBar(event) ? dayZones : timedZones,
+        grabMinutes: ((e.clientY - box.top) / HOUR_HEIGHT) * 60,
+        durationMinutes: eventMinutes(event),
+        compact,
+        titleLines: compact ? 0 : Math.floor((box.height - TIMED_CARD_CHROME) / TITLE_LINE_HEIGHT),
+      },
+      e.nativeEvent,
+      { grabX: e.clientX - box.left, grabY: e.clientY - box.top, width: box.width, height: box.height },
+    )
   }
 
   // Drags started outside the workspace (the task sidebar) render and drop here.
   const beginDrag = drag.begin
-  useEffect(() => onExternalDrag((payload, pointer, origin) => {
-    const item = taskEvent(payload.task)
-    const width = Math.min(Math.max(origin.width, 120), Math.max(columnWidth - 8, 120))
-    const grabX = origin.width ? (pointer.clientX - origin.left) / origin.width * width : 0
-    const grabY = Math.min(Math.max(pointer.clientY - origin.top, 0), EXTERNAL_GHOST_HEIGHT)
-    beginDrag({
-      type: 'move', item, originDay: item.task?.due ? dayKey(parseEventDate(item.start, item.allDay)) : dayKey(new Date()),
-      zones: ['timed', 'allday', 'month'], grabMinutes: grabY / HOUR_HEIGHT * 60,
-      durationMinutes: payload.task.durationMinutes, compact: true, titleLines: 0,
-      timeLabel: formatDuration(payload.task.durationMinutes),
-    }, pointer, { grabX, grabY, width, height: EXTERNAL_GHOST_HEIGHT })
-  }), [beginDrag, columnWidth])
+  useEffect(
+    () =>
+      onExternalDrag((payload, pointer, origin) => {
+        const item = taskEvent(payload.task)
+        const width = Math.min(Math.max(origin.width, 120), Math.max(columnWidth - 8, 120))
+        const grabX = origin.width ? ((pointer.clientX - origin.left) / origin.width) * width : 0
+        const grabY = Math.min(Math.max(pointer.clientY - origin.top, 0), EXTERNAL_GHOST_HEIGHT)
+        beginDrag(
+          {
+            type: 'move',
+            item,
+            originDay: item.task?.due ? dayKey(parseEventDate(item.start, item.allDay)) : dayKey(new Date()),
+            zones: ['timed', 'allday', 'month'],
+            grabMinutes: (grabY / HOUR_HEIGHT) * 60,
+            durationMinutes: payload.task.durationMinutes,
+            compact: true,
+            titleLines: 0,
+            timeLabel: formatDuration(payload.task.durationMinutes),
+          },
+          pointer,
+          { grabX, grabY, width, height: EXTERNAL_GHOST_HEIGHT },
+        )
+      }),
+    [beginDrag, columnWidth],
+  )
 
   const dragView = drag.view
   const dropTarget: DropTarget | null = dragView?.target ?? null
   const draggedItem = dragView?.data.type === 'move' ? dragView.data.item : null
-  const isDragged = (event: CalendarEvent) => !!draggedItem && (draggedItem.kind === 'task' ? event.taskId === draggedItem.taskId : event.id === draggedItem.id)
-  const zoneClass = (zone: DropZone, day: Date) => dropTarget?.zone === zone && dropTarget.day === dayKey(day)
-    ? dropTarget.invalid ? 'cal-drop-invalid' : zone === 'timed' ? '' : 'cal-drop-target'
-    : ''
+  const isDragged = (event: CalendarEvent) =>
+    !!draggedItem && (draggedItem.kind === 'task' ? event.taskId === draggedItem.taskId : event.id === draggedItem.id)
+  const zoneClass = (zone: DropZone, day: Date) =>
+    dropTarget?.zone === zone && dropTarget.day === dayKey(day)
+      ? dropTarget.invalid
+        ? 'cal-drop-invalid'
+        : zone === 'timed'
+          ? ''
+          : 'cal-drop-target'
+      : ''
 
   const toggleComplete = (event: CalendarEvent) => {
     if (!event.taskId) return
     setDropError('')
-    Promise.resolve(props.onTaskChange?.(event.taskId, { completed: !event.task?.completed })).catch(cause => reportError(cause, 'Could not update task.'))
+    Promise.resolve(props.onTaskChange?.(event.taskId, { completed: !event.task?.completed })).catch((cause) =>
+      reportError(cause, 'Could not update task.'),
+    )
   }
 
   const cardProps = (event: CalendarEvent) => ({
@@ -573,20 +775,21 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
 
   const days = useMemo(() => Array.from({ length: STRIP_DAYS }, (_, i) => addDays(stripStart, i)), [stripStart])
   const eventsByDay = useMemo(() => {
-    const indexed = new Map(days.map(day => [dayKey(day), [] as CalendarEvent[]]))
+    const indexed = new Map(days.map((day) => [dayKey(day), [] as CalendarEvent[]]))
     for (const event of visibleEvents) {
       const start = parseEventDate(event.start, event.allDay)
       const end = parseEventDate(event.end, event.allDay)
-      for (let day = startOfDay(start < days[0] ? days[0] : start); day <= days[days.length - 1] && day < end; day = addDays(day, 1))
+      for (
+        let day = startOfDay(start < days[0] ? days[0] : start);
+        day <= days[days.length - 1] && day < end;
+        day = addDays(day, 1)
+      )
         indexed.get(dayKey(day))?.push(event)
     }
     for (const events of indexed.values()) events.sort((a, b) => Number(b.kind === 'task') - Number(a.kind === 'task'))
     return indexed
   }, [days, visibleEvents])
-  const allDayCount = Math.max(
-    1,
-    ...days.map((day) => eventsByDay.get(dayKey(day))!.filter(inTopBar).length),
-  );
+  const allDayCount = Math.max(1, ...days.map((day) => eventsByDay.get(dayKey(day))!.filter(inTopBar).length))
   const monthFirst = new Date(date.getFullYear(), date.getMonth(), 1)
   const monthStart = startOfWeek(monthFirst)
   const monthDays = Array.from({ length: 42 }, (_, i) => addDays(monthStart, i))
@@ -597,16 +800,13 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
       ref={root}
       className="cal-workspace"
       aria-label="Calendar"
-      style={{ "--hour-height": `${HOUR_HEIGHT}px` } as CSSProperties}
+      style={{ '--hour-height': `${HOUR_HEIGHT}px` } as CSSProperties}
     >
       {props.showToolbar !== false && (
         <header className="cal-toolbar">
           <div className="cal-heading">
             <h1>{monthLabel}</h1>
-            <span className="cal-zone">
-              {props.timeZone ??
-                Intl.DateTimeFormat().resolvedOptions().timeZone}
-            </span>
+            <span className="cal-zone">{props.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone}</span>
           </div>
           <div className="cal-controls">
             <div className="cal-view-menu-wrap">
@@ -616,12 +816,11 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
                 aria-expanded={menuOpen}
                 onClick={() => setMenuOpen(!menuOpen)}
               >
-                {view[0].toUpperCase() + view.slice(1)}{" "}
-                <IconChevronDown aria-hidden="true" />
+                {view[0].toUpperCase() + view.slice(1)} <IconChevronDown aria-hidden="true" />
               </button>
               {menuOpen && (
                 <div className="cal-view-menu" role="menu">
-                  {(["day", "week", "month"] as const).map((option) => (
+                  {(['day', 'week', 'month'] as const).map((option) => (
                     <button
                       type="button"
                       role="menuitemradio"
@@ -639,11 +838,10 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
                       type="checkbox"
                       checked={showDeclined}
                       onChange={(e) => {
-                        if (props.showDeclined === undefined)
-                          setInternalDeclined(e.target.checked);
-                        props.onShowDeclinedChange?.(e.target.checked);
+                        if (props.showDeclined === undefined) setInternalDeclined(e.target.checked)
+                        props.onShowDeclinedChange?.(e.target.checked)
                       }}
-                    />{" "}
+                    />{' '}
                     Show declined
                   </label>
                 </div>
@@ -652,27 +850,17 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
             <button type="button" className="cal-button" onClick={jumpToday}>
               Today
             </button>
-            <button
-              type="button"
-              className="cal-icon-button"
-              aria-label="Previous"
-              onClick={() => navigate(-1)}
-            >
+            <button type="button" className="cal-icon-button" aria-label="Previous" onClick={() => navigate(-1)}>
               <IconChevronLeft />
             </button>
-            <button
-              type="button"
-              className="cal-icon-button"
-              aria-label="Next"
-              onClick={() => navigate(1)}
-            >
+            <button type="button" className="cal-icon-button" aria-label="Next" onClick={() => navigate(1)}>
               <IconChevronRight />
             </button>
             {props.toolbarActions}
           </div>
         </header>
       )}
-      {view === "month" ? (
+      {view === 'month' ? (
         <div className="cal-month">
           <div className="cal-month-head">
             {WEEKDAYS.map((day) => (
@@ -689,26 +877,21 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
                     day,
                   ),
                 )
-                .sort(
-                  (a, b) =>
-                    Number(b.kind === "task") - Number(a.kind === "task"),
-                );
+                .sort((a, b) => Number(b.kind === 'task') - Number(a.kind === 'task'))
               return (
                 <div
                   key={dayKey(day)}
-                  className={`cal-month-day ${day.getMonth() !== date.getMonth() ? "cal-outside" : ""} ${zoneClass("month", day)}`}
+                  className={`cal-month-day ${day.getMonth() !== date.getMonth() ? 'cal-outside' : ''} ${zoneClass('month', day)}`}
                   data-drop-zone="month"
                   data-day={dayKey(day)}
-                  onDoubleClick={(e) =>
-                    createAt(e.currentTarget, day, 9 * 60, true)
-                  }
+                  onDoubleClick={(e) => createAt(e.currentTarget, day, 9 * 60, true)}
                 >
                   <button
                     type="button"
-                    className={`cal-month-date ${sameDay(day, today) ? "cal-today" : ""}`}
+                    className={`cal-month-date ${sameDay(day, today) ? 'cal-today' : ''}`}
                     onClick={() => {
-                      setDate(day);
-                      setView("day");
+                      setDate(day)
+                      setView('day')
                     }}
                   >
                     {day.getDate()}
@@ -719,18 +902,14 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
                         key={event.id}
                         compact
                         event={event}
-                        past={
-                          parseEventDate(event.end, event.allDay) < new Date()
-                        }
+                        past={parseEventDate(event.end, event.allDay) < new Date()}
                         {...cardProps(event)}
                       />
                     ))}
-                    {items.length > 4 && (
-                      <span className="cal-more">+{items.length - 4} more</span>
-                    )}
+                    {items.length > 4 && <span className="cal-more">+{items.length - 4} more</span>}
                   </div>
                 </div>
-              );
+              )
             })}
           </div>
         </div>
@@ -739,7 +918,7 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
           className="cal-timeline-shell"
           style={
             {
-              "--all-day-height": `min(${Math.max(58, allDayCount * 23 + 6)}px, max(58px, 35vh))`,
+              '--all-day-height': `min(${Math.max(58, allDayCount * 23 + 6)}px, max(58px, 35vh))`,
             } as CSSProperties
           }
         >
@@ -747,14 +926,11 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
             <span>All-day</span>
           </div>
           <div className="cal-scroll" ref={scroller} onScroll={onScroll}>
-            <div
-              className="cal-strip"
-              style={{ width: columnWidth * STRIP_DAYS }}
-            >
+            <div className="cal-strip" style={{ width: columnWidth * STRIP_DAYS }}>
               <div className="cal-strip-head">
                 {days.map((day) => (
                   <div
-                    className={`cal-day-head ${sameDay(day, today) ? "cal-current-day" : ""}`}
+                    className={`cal-day-head ${sameDay(day, today) ? 'cal-current-day' : ''}`}
                     key={dayKey(day)}
                     style={{ width: columnWidth }}
                   >
@@ -768,13 +944,11 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
                   return (
                     <div
                       key={dayKey(day)}
-                      className={`cal-allday-cell ${zoneClass("allday", day)}`}
+                      className={`cal-allday-cell ${zoneClass('allday', day)}`}
                       data-drop-zone="allday"
                       data-day={dayKey(day)}
                       style={{ width: columnWidth }}
-                      onDoubleClick={(e) =>
-                        createAt(e.currentTarget, day, 0, true)
-                      }
+                      onDoubleClick={(e) => createAt(e.currentTarget, day, 0, true)}
                     >
                       {eventsByDay
                         .get(dayKey(day))!
@@ -784,57 +958,41 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
                             key={event.id}
                             compact
                             event={event}
-                            past={
-                              parseEventDate(event.end, event.allDay) <
-                              new Date()
-                            }
+                            past={parseEventDate(event.end, event.allDay) < new Date()}
                             {...cardProps(event)}
                           />
                         ))}
                     </div>
-                  );
+                  )
                 })}
               </div>
-              <div
-                className="cal-time-grid"
-                ref={timeline}
-                style={{ height: HOUR_HEIGHT * 24 }}
-              >
+              <div className="cal-time-grid" ref={timeline} style={{ height: HOUR_HEIGHT * 24 }}>
                 {days.map((day) => {
                   const preview =
-                    dropTarget?.zone === "timed" &&
+                    dropTarget?.zone === 'timed' &&
                     dropTarget.day === dayKey(day) &&
                     !dropTarget.invalid &&
                     dropTarget.minutes !== undefined &&
                     dropTarget.endMinutes !== undefined
                       ? dropTarget
-                      : null;
+                      : null
                   return (
                     <div
-                      className={`cal-time-day ${sameDay(day, today) ? "cal-current-day" : ""} ${zoneClass("timed", day)}`}
+                      className={`cal-time-day ${sameDay(day, today) ? 'cal-current-day' : ''} ${zoneClass('timed', day)}`}
                       key={dayKey(day)}
                       data-drop-zone="timed"
                       data-day={dayKey(day)}
                       style={{ width: columnWidth }}
                       onDoubleClick={(e) => {
-                        const box = e.currentTarget.getBoundingClientRect();
+                        const box = e.currentTarget.getBoundingClientRect()
                         const minutes = Math.max(
                           0,
-                          Math.min(
-                            23 * 60,
-                            Math.round(
-                              ((e.clientY - box.top) / HOUR_HEIGHT) * 4,
-                            ) * 15,
-                          ),
-                        );
-                        createAt(e.currentTarget, day, minutes);
+                          Math.min(23 * 60, Math.round(((e.clientY - box.top) / HOUR_HEIGHT) * 4) * 15),
+                        )
+                        createAt(e.currentTarget, day, minutes)
                       }}
                     >
-                      {timedSegments(
-                        eventsByDay.get(dayKey(day))!,
-                        day,
-                        HOUR_HEIGHT,
-                      ).map((segment) => (
+                      {timedSegments(eventsByDay.get(dayKey(day))!, day, HOUR_HEIGHT).map((segment) => (
                         <div
                           key={`${segment.event.id}-${dayKey(day)}`}
                           className="cal-event-position"
@@ -849,13 +1007,8 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
                           <EventCard
                             event={segment.event}
                             narrow={segment.width < 100}
-                            titleLines={Math.floor(
-                              (segment.height - TIMED_CARD_CHROME) /
-                                TITLE_LINE_HEIGHT,
-                            )}
-                            past={
-                              parseEventDate(segment.event.end) < new Date()
-                            }
+                            titleLines={Math.floor((segment.height - TIMED_CARD_CHROME) / TITLE_LINE_HEIGHT)}
+                            past={parseEventDate(segment.event.end) < new Date()}
                             {...cardProps(segment.event)}
                           />
                         </div>
@@ -866,9 +1019,7 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
                           aria-hidden="true"
                           style={{
                             top: (preview.minutes! / 60) * HOUR_HEIGHT,
-                            height:
-                              ((preview.endMinutes! - preview.minutes!) / 60) *
-                              HOUR_HEIGHT,
+                            height: ((preview.endMinutes! - preview.minutes!) / 60) * HOUR_HEIGHT,
                           }}
                         >
                           <span>
@@ -880,16 +1031,14 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
                         </div>
                       )}
                     </div>
-                  );
+                  )
                 })}
                 {days.some((day) => sameDay(day, today)) && (
                   <div
                     className="cal-now-line"
                     style={{
                       left: `${days.findIndex((day) => sameDay(day, today)) * columnWidth}px`,
-                      top:
-                        new Date().getHours() * HOUR_HEIGHT +
-                        (new Date().getMinutes() / 60) * HOUR_HEIGHT,
+                      top: new Date().getHours() * HOUR_HEIGHT + (new Date().getMinutes() / 60) * HOUR_HEIGHT,
                       width: columnWidth,
                     }}
                   />
@@ -901,7 +1050,7 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
             <div className="cal-hour-labels" ref={hourLabels}>
               {HOURS.map((hour) => (
                 <span key={hour} style={{ top: hour * HOUR_HEIGHT }}>
-                  {hour === 0 ? "" : formatTime(new Date(2024, 0, 1, hour))}
+                  {hour === 0 ? '' : formatTime(new Date(2024, 0, 1, hour))}
                 </span>
               ))}
             </div>
@@ -916,11 +1065,11 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
       >
         <IconPlus />
       </button>
-      {dragView?.data.type === "move" &&
+      {dragView?.data.type === 'move' &&
         createPortal(
           <div
             ref={drag.ghostRef}
-            className={`cal-drag-ghost ${dropTarget?.invalid ? "cal-drag-ghost-invalid" : ""}`}
+            className={`cal-drag-ghost ${dropTarget?.invalid ? 'cal-drag-ghost-invalid' : ''}`}
             style={{ width: dragView.width, height: dragView.height }}
             aria-hidden="true"
           >
@@ -929,10 +1078,16 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
               compact={dragView.data.compact}
               titleLines={dragView.data.titleLines}
               timeLabel={
-                dropTarget?.zone === "timed" && !dropTarget.invalid && dropTarget.minutes !== undefined && dropTarget.endMinutes !== undefined
+                dropTarget?.zone === 'timed' &&
+                !dropTarget.invalid &&
+                dropTarget.minutes !== undefined &&
+                dropTarget.endMinutes !== undefined
                   ? dragView.data.compact || dragView.data.titleLines < 1
                     ? formatShortTime(wallClock(dropTarget.day, dropTarget.minutes))
-                    : formatTimeRange(wallClock(dropTarget.day, dropTarget.minutes), wallClock(dropTarget.day, dropTarget.endMinutes))
+                    : formatTimeRange(
+                        wallClock(dropTarget.day, dropTarget.minutes),
+                        wallClock(dropTarget.day, dropTarget.endMinutes),
+                      )
                   : dragView.data.timeLabel
               }
               past={false}
@@ -943,18 +1098,14 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
       {dropError && (
         <div className="cal-drop-error" role="alert">
           {dropError}
-          <button
-            type="button"
-            aria-label="Dismiss error"
-            onClick={() => setDropError("")}
-          >
+          <button type="button" aria-label="Dismiss error" onClick={() => setDropError('')}>
             <IconX />
           </button>
         </div>
       )}
       {editor && (editingEvent || editor.draft) && (
         <EventPopover
-          key={editor.eventId ?? "draft"}
+          key={editor.eventId ?? 'draft'}
           event={editingEvent}
           draft={editingEvent ? null : editor.draft}
           anchor={editor.anchor}
@@ -969,7 +1120,7 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
         />
       )}
     </section>
-  );
+  )
 }
 
 export default CalendarWorkspace

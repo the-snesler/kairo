@@ -56,15 +56,15 @@ To restore, stop the container, replace the database in the volume with a verifi
 
 ## Commands
 
-| Command | Purpose |
-| --- | --- |
-| `pnpm dev` | Migrate and run the local app |
-| `pnpm build` | Build the production app |
-| `pnpm start` | Run the built server |
-| `pnpm worker` | Run background sync locally |
-| `pnpm db:migrate` | Apply migrations |
-| `pnpm typecheck` | Check TypeScript |
-| `pnpm test` | Run integration and core tests |
+| Command           | Purpose                        |
+| ----------------- | ------------------------------ |
+| `pnpm dev`        | Migrate and run the local app  |
+| `pnpm build`      | Build the production app       |
+| `pnpm start`      | Run the built server           |
+| `pnpm worker`     | Run background sync locally    |
+| `pnpm db:migrate` | Apply migrations               |
+| `pnpm typecheck`  | Check TypeScript               |
+| `pnpm test`       | Run integration and core tests |
 
 ### Current boundaries
 

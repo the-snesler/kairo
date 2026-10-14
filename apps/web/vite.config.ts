@@ -6,7 +6,11 @@ import Icons from 'unplugin-icons/vite'
 import { nitro } from 'nitro/vite'
 import { fileURLToPath } from 'node:url'
 
-try { process.loadEnvFile(new URL('../../.env', import.meta.url)) } catch { /* Docker supplies environment variables. */ }
+try {
+  process.loadEnvFile(new URL('../../.env', import.meta.url))
+} catch {
+  /* Docker supplies environment variables. */
+}
 
 export default defineConfig({
   envDir: '../../',

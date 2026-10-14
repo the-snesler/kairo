@@ -2,22 +2,29 @@ import { addDays, isValid, parse, startOfDay } from 'date-fns'
 
 export const DAY_MINUTES = 24 * 60
 
-const circular = (a: number, b: number) => { const d = Math.abs(a - b) % DAY_MINUTES; return Math.min(d, DAY_MINUTES - d) }
+const circular = (a: number, b: number) => {
+  const d = Math.abs(a - b) % DAY_MINUTES
+  return Math.min(d, DAY_MINUTES - d)
+}
 
 /**
  * Minute of day for typed times like "3", "3p", "330pm", "15:30", "noon".
  * A bare 1–12 hour has no period, so it resolves to whichever of AM/PM is closer to `reference`.
  */
 export function parseTime(text: string, reference = 12 * 60): number | null {
-  const value = text.trim().toLowerCase().replace(/\s+|\./g, '')
+  const value = text
+    .trim()
+    .toLowerCase()
+    .replace(/\s+|\./g, '')
   if (value === 'noon') return 12 * 60
   if (value === 'midnight') return 0
   const match = /^(\d{1,2})(?::?(\d{2}))?(a|am|p|pm)?$/.exec(value)
   if (!match) return null
-  const hour = Number(match[1]), minute = match[2] ? Number(match[2]) : 0
+  const hour = Number(match[1]),
+    minute = match[2] ? Number(match[2]) : 0
   if (minute > 59) return null
   const period = match[3]?.[0]
-  if (period) return hour >= 1 && hour <= 12 ? (hour % 12 + (period === 'p' ? 12 : 0)) * 60 + minute : null
+  if (period) return hour >= 1 && hour <= 12 ? ((hour % 12) + (period === 'p' ? 12 : 0)) * 60 + minute : null
   if (hour > 23) return null
   // "0", "13"–"23" and zero-padded hours ("09") are unambiguous 24-hour times.
   if (hour === 0 || hour > 12 || match[1].startsWith('0')) return hour * 60 + minute
@@ -35,7 +42,23 @@ export function parseDuration(text: string): number | null {
   return Math.round(Number(match[1] ?? 0) * 60 + Number(match[2] ?? 0))
 }
 
-const DATE_FORMATS = ['yyyy-MM-dd', 'M/d/yyyy', 'M/d/yy', 'M/d', 'MMM d yyyy', 'MMM d', 'MMMM d yyyy', 'MMMM d', 'd MMM', 'd MMMM', 'EEE MMM d yyyy', 'EEE MMM d', 'EEEE MMMM d', 'EEE', 'EEEE']
+const DATE_FORMATS = [
+  'yyyy-MM-dd',
+  'M/d/yyyy',
+  'M/d/yy',
+  'M/d',
+  'MMM d yyyy',
+  'MMM d',
+  'MMMM d yyyy',
+  'MMMM d',
+  'd MMM',
+  'd MMMM',
+  'EEE MMM d yyyy',
+  'EEE MMM d',
+  'EEEE MMMM d',
+  'EEE',
+  'EEEE',
+]
 const WEEKDAY_ONLY = new Set(['EEE', 'EEEE'])
 
 /** Local midnight for typed dates like "oct 20", "10/20", "tomorrow" or "fri" (the next Friday). */

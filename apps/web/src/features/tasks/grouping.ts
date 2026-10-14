@@ -2,11 +2,19 @@ import { differenceInCalendarDays, format, parseISO, startOfDay } from 'date-fns
 import type { TaskDue, TaskSummary } from './types'
 
 export type TaskGroupId = 'overdue' | 'today' | 'tomorrow' | 'week' | 'later' | 'none'
-export interface TaskGroup { id: TaskGroupId, label: string, tasks: TaskSummary[] }
+export interface TaskGroup {
+  id: TaskGroupId
+  label: string
+  tasks: TaskSummary[]
+}
 
-export const TASK_GROUPS: { id: TaskGroupId, label: string }[] = [
-  { id: 'overdue', label: 'Overdue' }, { id: 'today', label: 'Today' }, { id: 'tomorrow', label: 'Tomorrow' },
-  { id: 'week', label: 'This week' }, { id: 'later', label: 'Later' }, { id: 'none', label: 'No date' },
+export const TASK_GROUPS: { id: TaskGroupId; label: string }[] = [
+  { id: 'overdue', label: 'Overdue' },
+  { id: 'today', label: 'Today' },
+  { id: 'tomorrow', label: 'Tomorrow' },
+  { id: 'week', label: 'This week' },
+  { id: 'later', label: 'Later' },
+  { id: 'none', label: 'No date' },
 ]
 
 /** Local Date for a due value: all-day dates are local midnight, timed values the instant itself. */
@@ -31,14 +39,16 @@ export function taskGroupId(task: TaskSummary, now: Date): TaskGroupId {
 // Day first (for multi-day groups), then timed by time, then all-day, then priority desc, then title.
 export function compareTasks(a: TaskSummary, b: TaskSummary): number {
   if (a.due && b.due) {
-    const da = dueToDate(a.due), db = dueToDate(b.due)
+    const da = dueToDate(a.due),
+      db = dueToDate(b.due)
     const day = startOfDay(da).getTime() - startOfDay(db).getTime()
     if (day) return day
-    const ta = isTimed(a.due), tb = isTimed(b.due)
+    const ta = isTimed(a.due),
+      tb = isTimed(b.due)
     if (ta !== tb) return ta ? -1 : 1
     if (ta && da.getTime() !== db.getTime()) return da.getTime() - db.getTime()
   }
-  return (b.priority - a.priority) || a.title.localeCompare(b.title)
+  return b.priority - a.priority || a.title.localeCompare(b.title)
 }
 
 /** Open tasks grouped by due date relative to `now`; empty groups omitted. */
@@ -65,11 +75,15 @@ export function dueLabel(task: TaskSummary, group: TaskGroupId, now: Date): stri
   const date = dueToDate(task.due)
   const time = isTimed(task.due) ? formatTaskTime(date) : ''
   if (group === 'today' || group === 'tomorrow') return time
-  const day = group === 'week' ? format(date, 'EEE') : format(date, date.getFullYear() === now.getFullYear() ? 'MMM d' : 'MMM d, yyyy')
+  const day =
+    group === 'week'
+      ? format(date, 'EEE')
+      : format(date, date.getFullYear() === now.getFullYear() ? 'MMM d' : 'MMM d, yyyy')
   return time ? `${day} ${time}` : day
 }
 
 export function formatDuration(minutes: number): string {
-  const h = Math.floor(minutes / 60), m = Math.round(minutes % 60)
+  const h = Math.floor(minutes / 60),
+    m = Math.round(minutes % 60)
   return h ? (m ? `${h}h ${m}m` : `${h}h`) : `${m}m`
 }
