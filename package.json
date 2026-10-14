@@ -9,6 +9,11 @@
     "worker": "pnpm --filter @kairo/web worker",
     "typecheck": "pnpm --filter @kairo/web typecheck",
     "db:migrate": "pnpm --filter @kairo/db migrate",
-    "test": "pnpm -r test"
+    "test": "pnpm -r test",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "prettier": "^3.9.10"
   }
 }

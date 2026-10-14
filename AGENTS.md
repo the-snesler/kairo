@@ -14,11 +14,13 @@ pnpm worker              # background sync (separate process; run alongside dev)
 pnpm typecheck           # tsc for @kairo/web only
 pnpm build
 pnpm test                # pnpm -r test across all packages
+pnpm format              # Prettier --write (config in .prettierrc.json)
+pnpm format:check        # what CI runs
 pnpm db:migrate
 pnpm --filter @kairo/db generate   # drizzle-kit: generate a migration after editing the schema
 ```
 
-CI (`.github/workflows/ci.yml`) runs `typecheck`, `build`, `test` on Node 24.
+CI (`.github/workflows/ci.yml`) runs `format:check`, `typecheck`, `build`, `test` on Node 24. Run `pnpm format` before committing.
 
 Tests use Node's built-in runner (`node:test` + `node:assert/strict`) via `tsx --test`, not Jest/Vitest. Each package's `test` script sets env vars (e.g. `DATABASE_URL=:memory:`, `ENCRYPTION_KEY`, Todoist IDs for web), so run tests through the package script rather than calling `tsx` directly:
 
