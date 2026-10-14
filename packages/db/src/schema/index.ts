@@ -93,6 +93,7 @@ export const userCalendarSetting = sqliteTable('user_calendar_setting', {
   visible: integer('visible', { mode: 'boolean' }).notNull().default(true),
   isDefault: integer('is_default', { mode: 'boolean' }).notNull().default(false),
   isMaybe: integer('is_maybe', { mode: 'boolean' }).notNull().default(false),
+  isTasks: integer('is_tasks', { mode: 'boolean' }).notNull().default(false),
 }, (table) => [primaryKey({ columns: [table.userId, table.calendarId] })])
 
 export const googleEvent = sqliteTable('google_event', {

@@ -1,12 +1,12 @@
 import '@tanstack/react-start/server-only'
 import { and, eq } from 'drizzle-orm'
 import { db, accountAccess, calendar, eventDecision, eventProjection, externalEvent, googleEvent, icsSource, task, taskConnection, taskEstimate, userCalendarSetting } from '@kairo/db'
-import { effectiveTaskDuration, enqueueJob, normalizeGoogleEvent, reconcileProjection } from '@kairo/core'
+import { effectiveTaskDuration, enqueueJob, normalizeGoogleEvent, reconcileProjection, syncTaskBlocks } from '@kairo/core'
 import { closestEventColorId, GOOGLE_EVENT_COLORS, GoogleApiError, type GoogleEvent } from '@kairo/integrations'
 import type { CalendarEvent } from '../features/calendar/types'
 import type { TaskSummary } from '../features/tasks/types'
 import { getAuthStatus, getSession, requireUser } from './auth'
-import { clientForCalendar, connectionCanWrite, processJobs, syncAll, syncIcsSource, taskProviders } from './sync'
+import { clientForCalendar, connectionCanWrite, processJobs, syncAll, syncIcsSource, taskMirrorCalendarId, taskProviders } from './sync'
 
 async function ownedCalendar(userId: string, calendarId: string) {
   const [row] = await db.select({ cal: calendar, access: accountAccess }).from(calendar)
@@ -42,7 +42,7 @@ export async function getCalendarSnapshotImpl(data: { start: string; end: string
     .innerJoin(accountAccess, eq(calendar.connectedAccountId, accountAccess.connectedAccountId))
     .leftJoin(userCalendarSetting, and(eq(userCalendarSetting.calendarId, calendar.id), eq(userCalendarSetting.userId, user.id)))
     .where(eq(accountAccess.userId, user.id))
-  const calendars = owned.map(({ cal, setting }) => ({ id: cal.id, name: cal.name, color: cal.color || '#8b8aa7', visible: setting?.visible ?? true, isDefault: setting?.isDefault ?? false, isMaybe: setting?.isMaybe ?? false, accessRole: cal.accessRole || 'reader', syncStatus: cal.syncStatus, lastError: cal.lastError }))
+  const calendars = owned.map(({ cal, setting }) => ({ id: cal.id, name: cal.name, color: cal.color || '#8b8aa7', visible: setting?.visible ?? true, isDefault: setting?.isDefault ?? false, isMaybe: setting?.isMaybe ?? false, isTasks: setting?.isTasks ?? false, accessRole: cal.accessRole || 'reader', syncStatus: cal.syncStatus, lastError: cal.lastError }))
   const calIds = new Set(calendars.map((item) => item.id))
   const allSources = await db.select().from(icsSource).where(eq(icsSource.ownerUserId, user.id))
   const externalSources = allSources.filter((source) => source.status !== 'removed')
@@ -127,7 +127,7 @@ export async function getCalendarSnapshotImpl(data: { start: string; end: string
     const eventEnd = timed ? new Date(Date.parse(eventStart) + summary.durationMinutes * 60_000).toISOString() : new Date(Date.parse(`${eventStart}T00:00:00Z`) + 86400_000).toISOString().slice(0, 10)
     if (intersects(eventStart, eventEnd, start, end)) events.push({ id: `task:${summary.id}`, kind: 'task', taskId: summary.id, task: summary, title: summary.title, start: eventStart, end: eventEnd, allDay: !timed, editable })
   })
-  return { calendars, sources: externalSources.map((item) => ({ id: item.id, name: item.name, color: item.color, status: item.status, lastError: item.lastError })), tasks: summaries, events, conflicts, connections: { google: owned.length > 0, todoist: connections.some((item) => !!item.providerSubject && !!item.encryptedCredentials && item.status !== 'reconnect'), todoistNeedsReconnect: connections.some((item) => item.status === 'reconnect' || !item.providerSubject), todoistCanWrite: connections.some((item) => !!item.providerSubject && !!item.encryptedCredentials && connectionCanWrite(item)) }, errors: [...calendars.filter((item) => item.lastError).map((item) => `${item.name}: ${item.lastError}`), ...externalSources.filter((item) => item.lastError).map((item) => `${item.name}: ${item.lastError}`), ...connections.filter((item) => item.lastError).map((item) => `Todoist: ${item.lastError}`)] }
+  return { calendars, taskCalendarId: await taskMirrorCalendarId(user.id), sources: externalSources.map((item) => ({ id: item.id, name: item.name, color: item.color, status: item.status, lastError: item.lastError })), tasks: summaries, events, conflicts, connections: { google: owned.length > 0, todoist: connections.some((item) => !!item.providerSubject && !!item.encryptedCredentials && item.status !== 'reconnect'), todoistNeedsReconnect: connections.some((item) => item.status === 'reconnect' || !item.providerSubject), todoistCanWrite: connections.some((item) => !!item.providerSubject && !!item.encryptedCredentials && connectionCanWrite(item)) }, errors: [...calendars.filter((item) => item.lastError).map((item) => `${item.name}: ${item.lastError}`), ...externalSources.filter((item) => item.lastError).map((item) => `${item.name}: ${item.lastError}`), ...connections.filter((item) => item.lastError).map((item) => `Todoist: ${item.lastError}`)] }
 }
 
 export async function resolveProjectionConflictImpl(data: { id: string; action: 'restore' | 'keep-google' | 'remove-decision' }) {
@@ -207,10 +207,24 @@ export async function setCalendarVisibilityImpl(data: { calendarId: string; visi
   return { ok: true }
 }
 
-export async function setCalendarRoleImpl(data: { calendarId: string; role: 'default' | 'maybe'; active: boolean }) {
-  const user = await requireUser(); await ownedCalendar(user.id, data.calendarId)
-  if (data.active) await db.update(userCalendarSetting).set(data.role === 'default' ? { isDefault: false } : { isMaybe: false }).where(eq(userCalendarSetting.userId, user.id))
-  await db.insert(userCalendarSetting).values({ userId: user.id, calendarId: data.calendarId, isDefault: data.role === 'default' && data.active, isMaybe: data.role === 'maybe' && data.active }).onConflictDoUpdate({ target: [userCalendarSetting.userId, userCalendarSetting.calendarId], set: data.role === 'default' ? { isDefault: data.active } : { isMaybe: data.active } })
+export async function setCalendarRoleImpl(data: { calendarId: string; role: 'default' | 'maybe' | 'tasks'; active: boolean }) {
+  const user = await requireUser()
+  const cal = await ownedCalendar(user.id, data.calendarId)
+  if (data.role === 'tasks' && data.active && cal.accessRole !== 'owner' && cal.accessRole !== 'writer')
+    throw new Error('Choose a writable calendar for tasks')
+  const field = { default: 'isDefault', maybe: 'isMaybe', tasks: 'isTasks' } as const
+  const key = field[data.role]
+  db.transaction((tx) => {
+    if (data.active) tx.update(userCalendarSetting).set({ [key]: false }).where(eq(userCalendarSetting.userId, user.id)).run()
+    tx.insert(userCalendarSetting).values({ userId: user.id, calendarId: data.calendarId, [key]: data.active })
+      .onConflictDoUpdate({ target: [userCalendarSetting.userId, userCalendarSetting.calendarId], set: { [key]: data.active } }).run()
+  })
+  if (data.role === 'tasks' || data.role === 'default') {
+    const calendarId = await taskMirrorCalendarId(user.id)
+    const connections = await db.select().from(taskConnection).where(eq(taskConnection.ownerUserId, user.id))
+    for (const connection of connections) await syncTaskBlocks(db, { connectionId: connection.id }, calendarId)
+    void processJobs().catch((error) => console.error('Task sync failed', error))
+  }
   return { ok: true }
 }
 
