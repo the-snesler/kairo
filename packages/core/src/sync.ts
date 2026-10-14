@@ -238,6 +238,52 @@ export async function syncTaskBlocks(db: Db, scope: { connectionId: string } | {
   return jobs;
 }
 
+type TaskConnectionRow = typeof taskConnection.$inferSelect;
+
+// Blocks moved or resized in Google become the task's new time and are pushed to the provider. If the provider
+// can't take the edit (read-only, reconnect) or the event was deleted or made all-day, Kairo's block is restored.
+export async function applyTaskBlockMoves(db: Db, calendarId: string, canWrite: (connection: TaskConnectionRow) => boolean) {
+  const rows = db.select({ event: googleEvent, block: taskBlock, item: task, connection: taskConnection }).from(googleEvent)
+    .innerJoin(taskBlock, and(eq(googleEvent.taskBlockId, taskBlock.id), eq(googleEvent.googleEventId, taskBlock.googleEventId)))
+    .innerJoin(task, eq(taskBlock.taskId, task.id)).innerJoin(taskConnection, eq(task.connectionId, taskConnection.id))
+    // Pending blocks are about to be rewritten from Kairo, so an older Google copy of them isn't a remote edit.
+    .where(and(eq(googleEvent.calendarId, calendarId), eq(taskBlock.calendarId, calendarId), eq(taskBlock.syncState, 'ready'))).all();
+  const pushes: string[] = [], resets: string[] = [];
+  db.transaction((tx: Db) => {
+    const now = new Date();
+    for (const { event, block, item, connection } of rows) {
+      // syncTaskBlocks removes blocks of tasks that are no longer timed and open.
+      if (event.etag === block.lastAppliedEtag || !item.dueDateTime || item.completed || item.deleted) continue;
+      const timed = event.status !== 'cancelled' && !event.allDay && event.startAt && event.endAt && event.endAt > event.startAt;
+      if (timed && event.startAt.getTime() === block.startAt.getTime() && event.endAt.getTime() === block.endAt.getTime()) {
+        tx.update(taskBlock).set({ lastAppliedEtag: event.etag }).where(eq(taskBlock.id, block.id)).run();
+        continue;
+      }
+      if (!timed || !canWrite(connection)) {
+        tx.update(taskBlock).set({ syncState: 'pending', updatedAt: now }).where(eq(taskBlock.id, block.id)).run();
+        resets.push(block.id);
+        continue;
+      }
+      const start: Date = event.startAt, minutes = Math.max(1, Math.round((event.endAt.getTime() - start.getTime()) / 60_000));
+      const estimate = tx.select({ minutes: taskEstimate.minutes }).from(taskEstimate).where(eq(taskEstimate.taskId, item.id)).get()?.minutes;
+      const local: Record<string, unknown> = { updatedAt: now };
+      if (minutes !== effectiveTaskDuration(item, estimate).minutes) local.durationOverrideMinutes = minutes;
+      if (start.getTime() !== item.dueDateTime.getTime()) {
+        const pending: TaskPatch = item.pendingPatch ? JSON.parse(item.pendingPatch) : {};
+        Object.assign(local, { dueDate: null, dueDateTime: start, ...(item.dueRecurring ? {} : { dueString: null }),
+          pendingPatch: JSON.stringify(mergePendingPatch(pending, { due: { dateTime: start.toISOString() } }, false)) });
+        pushes.push(item.id);
+      }
+      tx.update(task).set(local).where(eq(task.id, item.id)).run();
+      tx.update(taskBlock).set({ startAt: start, endAt: new Date(start.getTime() + minutes * 60_000), lastAppliedEtag: event.etag, updatedAt: now })
+        .where(eq(taskBlock.id, block.id)).run();
+    }
+  });
+  for (const id of pushes) await enqueueJob(db, 'task-push', id);
+  for (const id of resets) await enqueueJob(db, 'task-block', id);
+  return { pushed: pushes, reset: resets };
+}
+
 // A running job keeps its lease (no parallel run); the bumped updatedAt tells finishJob to run it again.
 export async function enqueueJob(db: Db, kind: string, targetId: string, nextRunAt = new Date()) {
   const jobKey = `${kind}:${targetId}`, now = new Date();
@@ -395,7 +441,7 @@ export async function reconcileTaskBlock(db: Db, blockId: string,
   }
   if (!cal) return;
   const client = await clientForCalendar(cal.id);
-  // The mirror is derived from the task, so Kairo's version always wins over remote edits.
+  // The mirror is derived from the task; remote moves are folded into the task first (applyTaskBlockMoves).
   const body: Partial<GoogleEvent> = { summary: linkedTask.content, description: 'Task blocked by Kairo', status: 'confirmed',
     colorId: closestEventColorId(linkedTask.projectColor ?? DEFAULT_TASK_COLOR), start: { dateTime: block.startAt.toISOString() },
     end: { dateTime: block.endAt.toISOString() }, extendedProperties: { private: { kairoTaskBlockId: block.id } } };

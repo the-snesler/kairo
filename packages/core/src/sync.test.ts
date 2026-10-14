@@ -4,7 +4,7 @@ import test from 'node:test';
 import { eq } from 'drizzle-orm';
 import { db, sqlite } from '@kairo/db';
 import { calendar, connectedAccount, eventDecision, eventProjection, externalEvent, googleEvent, icsSource, syncJob, task, taskBlock, taskConnection, taskEstimate, user } from '@kairo/db/schema';
-import { applyGoogleSnapshot, applyIcsSnapshot, applyTaskSync, clearPendingFields, enqueueJob, finishJob, isJobRunning, leaseJobs, mergePendingPatch, planTaskBlock, pushPendingPatch, reconcileProjection, reconcileTaskBlock, syncTaskBlocks } from './sync.js';
+import { applyGoogleSnapshot, applyIcsSnapshot, applyTaskBlockMoves, applyTaskSync, clearPendingFields, enqueueJob, finishJob, isJobRunning, leaseJobs, mergePendingPatch, planTaskBlock, pushPendingPatch, reconcileProjection, reconcileTaskBlock, syncTaskBlocks } from './sync.js';
 import type { GoogleCalendarClient, NormalizedTask } from '@kairo/integrations';
 
 for (const file of readdirSync('../db/migrations').filter(name => name.endsWith('.sql')).sort())
@@ -204,4 +204,54 @@ test('mirror blocks are created, moved, and deleted through Google', async () =>
   await reconcileTaskBlock(db, created, async () => client);
   assert.equal(db.select().from(taskBlock).where(eq(taskBlock.taskId, local.id)).all().length, 0);
   assert.deepEqual(calls, ['create:Write more', 'update:g-block', 'delete:g-block']);
+});
+
+test('blocks moved in Google move the task, or are restored when the provider is read-only', async () => {
+  db.delete(syncJob).run();
+  const moved = db.insert(task).values({ connectionId: 'todoist', todoistId: 'moved', content: 'Moved', dueDateTime: new Date('2026-10-01T10:00:00Z'), dueString: 'Oct 1 10am' }).returning().get();
+  db.insert(taskBlock).values({ id: 'moved-block', taskId: moved.id, calendarId: 'cal', googleEventId: 'g-moved', syncState: 'ready', lastAppliedEtag: 'e1',
+    startAt: new Date('2026-10-01T10:00:00Z'), endAt: new Date('2026-10-01T10:30:00Z') }).run();
+  const event = (etag: string, start: string, end: string, extra: object = {}) => ({ id: 'g-moved', etag, summary: 'Moved',
+    start: { dateTime: start }, end: { dateTime: end }, extendedProperties: { private: { kairoTaskBlockId: 'moved-block' } }, ...extra });
+  const blockRow = () => db.select().from(taskBlock).where(eq(taskBlock.id, 'moved-block')).get()!;
+  const taskRow = () => db.select().from(task).where(eq(task.id, moved.id)).get()!;
+  const jobs = () => db.select({ jobKey: syncJob.jobKey }).from(syncJob).all().map(row => row.jobKey);
+
+  // Our own write echoing back is not a move.
+  await applyGoogleSnapshot(db, 'cal', [event('e1', '2026-10-01T10:00:00Z', '2026-10-01T10:30:00Z')], 'c', false);
+  assert.deepEqual(await applyTaskBlockMoves(db, 'cal', () => true), { pushed: [], reset: [] });
+
+  // Moved and stretched: the task takes the new time and duration, and the due date is pushed.
+  await applyGoogleSnapshot(db, 'cal', [event('e2', '2026-10-02T14:00:00Z', '2026-10-02T15:00:00Z')], 'c', false);
+  assert.deepEqual(await applyTaskBlockMoves(db, 'cal', () => true), { pushed: [moved.id], reset: [] });
+  assert.equal(taskRow().dueDateTime?.toISOString(), '2026-10-02T14:00:00.000Z');
+  assert.equal(taskRow().dueString, null);
+  assert.equal(taskRow().durationOverrideMinutes, 60);
+  assert.deepEqual(JSON.parse(taskRow().pendingPatch!), { due: { dateTime: '2026-10-02T14:00:00.000Z' } });
+  assert.equal(blockRow().endAt.toISOString(), '2026-10-02T15:00:00.000Z');
+  assert.equal(blockRow().lastAppliedEtag, 'e2');
+  assert.deepEqual(jobs(), [`task-push:${moved.id}`]);
+  assert.deepEqual(await syncTaskBlocks(db, { taskIds: [moved.id] }, 'cal'), []);
+  db.delete(syncJob).run();
+
+  // Only resized: a Kairo-only duration change, nothing to push.
+  await applyGoogleSnapshot(db, 'cal', [event('e3', '2026-10-02T14:00:00Z', '2026-10-02T14:45:00Z')], 'c', false);
+  assert.deepEqual(await applyTaskBlockMoves(db, 'cal', () => true), { pushed: [], reset: [] });
+  assert.equal(taskRow().durationOverrideMinutes, 45);
+
+  // Read-only provider: the block is put back where the task is.
+  await applyGoogleSnapshot(db, 'cal', [event('e4', '2026-10-03T09:00:00Z', '2026-10-03T09:45:00Z')], 'c', false);
+  assert.deepEqual(await applyTaskBlockMoves(db, 'cal', () => false), { pushed: [], reset: ['moved-block'] });
+  assert.equal(taskRow().dueDateTime?.toISOString(), '2026-10-02T14:00:00.000Z');
+  assert.equal(blockRow().syncState, 'pending');
+  assert.deepEqual(jobs(), ['task-block:moved-block']);
+
+  // A pending block is about to overwrite Google, so a stale remote copy is ignored.
+  assert.deepEqual(await applyTaskBlockMoves(db, 'cal', () => true), { pushed: [], reset: [] });
+
+  // Deleted in Google: recreated.
+  db.update(taskBlock).set({ syncState: 'ready' }).where(eq(taskBlock.id, 'moved-block')).run();
+  await applyGoogleSnapshot(db, 'cal', [event('e5', '2026-10-02T14:00:00Z', '2026-10-02T14:45:00Z', { status: 'cancelled' })], 'c', false);
+  assert.deepEqual(await applyTaskBlockMoves(db, 'cal', () => true), { pushed: [], reset: ['moved-block'] });
+  db.delete(syncJob).run();
 });

@@ -1,6 +1,6 @@
 import { and, eq, isNotNull } from 'drizzle-orm'
 import { db, accountAccess, calendar, connectedAccount, googleEvent, icsSource, task, taskConnection, userCalendarSetting } from '@kairo/db'
-import { applyGoogleSnapshot, applyIcsSnapshot, applyTaskSync, clearPendingFields, enqueueJob, finishJob, leaseJobs, pushPendingPatch, reconcileProjection, reconcileTaskBlock, syncTaskBlocks } from '@kairo/core'
+import { applyGoogleSnapshot, applyIcsSnapshot, applyTaskBlockMoves, applyTaskSync, clearPendingFields, enqueueJob, finishJob, leaseJobs, pushPendingPatch, reconcileProjection, reconcileTaskBlock, syncTaskBlocks } from '@kairo/core'
 import { createTodoistProvider, fetchIcs, GOOGLE_EVENT_COLORS, GoogleCalendarClient, parseIcs, refreshGoogleToken, syncGoogleEvents, TODOIST_SCOPE, type TaskProvider, type TodoistOAuthToken } from '@kairo/integrations'
 import { decryptJson, encryptJson, googleCredentials, todoistCredentials } from './credentials'
 
@@ -75,6 +75,7 @@ export async function syncGoogleCalendar(calendarId: string) {
         if (!old?.color || old.colorId !== item.colorId) await db.update(googleEvent).set({ color }).where(and(eq(googleEvent.calendarId, cal.id), eq(googleEvent.googleEventId, item.id)))
       }
     })
+    await applyTaskBlockMoves(db, cal.id, connectionCanWrite)
   } catch (error) {
     await db.update(calendar).set({ syncStatus: 'error', lastError: String(error), updatedAt: new Date() }).where(eq(calendar.id, calendarId))
     throw error
