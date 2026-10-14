@@ -1,0 +1,1 @@
+ALTER TABLE `user_calendar_setting` ADD `is_tasks` integer DEFAULT false NOT NULL;
