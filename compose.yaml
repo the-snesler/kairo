@@ -3,16 +3,22 @@ services:
     image: ghcr.io/the-snesler/kairo:latest
     # build: .  # build locally instead of pulling the published image
     ports:
-      - "3000:3000"
+      - '3000:3000'
     env_file: .env
     environment:
       DATABASE_URL: /app/data/kairo.db
       HOST: 0.0.0.0
-      PORT: "3000"
+      PORT: '3000'
     volumes:
       - kairo-data:/app/data
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3000/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -22,7 +28,7 @@ services:
   worker:
     image: ghcr.io/the-snesler/kairo:latest
     # build: .  # build locally instead of pulling the published image
-    command: ["pnpm", "worker"]
+    command: ['pnpm', 'worker']
     env_file: .env
     environment:
       DATABASE_URL: /app/data/kairo.db

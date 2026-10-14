@@ -61,7 +61,9 @@ export interface BeginGeometry {
  */
 export function useCalendarDrag<T>(options: CalendarDragOptions<T>) {
   const optionsRef = useRef(options)
-  useLayoutEffect(() => { optionsRef.current = options })
+  useLayoutEffect(() => {
+    optionsRef.current = options
+  })
   const [view, setView] = useState<DragView<T> | null>(null)
   const session = useRef<DragSession<T> | null>(null)
   const ghost = useRef<HTMLElement | null>(null)
@@ -72,7 +74,8 @@ export function useCalendarDrag<T>(options: CalendarDragOptions<T>) {
 
   const placeGhost = () => {
     const current = session.current
-    if (ghost.current && current) ghost.current.style.transform = `translate3d(${current.x - current.grabX}px, ${current.y - current.grabY}px, 0)`
+    if (ghost.current && current)
+      ghost.current.style.transform = `translate3d(${current.x - current.grabX}px, ${current.y - current.grabY}px, 0)`
   }
 
   const ghostRef = useCallback((node: HTMLElement | null) => {
@@ -88,7 +91,7 @@ export function useCalendarDrag<T>(options: CalendarDragOptions<T>) {
     if (next === key.current) return
     key.current = next
     setRootClass('cal-drag-invalid', !!target?.invalid)
-    setView(view => view && { ...view, target })
+    setView((view) => view && { ...view, target })
   }
 
   const tick = () => {
@@ -101,7 +104,7 @@ export function useCalendarDrag<T>(options: CalendarDragOptions<T>) {
       const insideY = current.y >= rect.top && current.y <= rect.bottom
       const vy = insideX ? edgeVelocity(current.y, area.gridTop, rect.bottom) : 0
       const vx = area.horizontal && insideY ? edgeVelocity(current.x, rect.left, rect.right, 32, 12) : 0
-      const step = (v: number) => v === 0 ? 0 : Math.sign(v) * Math.max(1, Math.round(Math.abs(v)))
+      const step = (v: number) => (v === 0 ? 0 : Math.sign(v) * Math.max(1, Math.round(Math.abs(v))))
       if (vy || vx) {
         const top = area.element.scrollTop
         const left = area.element.scrollLeft
@@ -126,7 +129,10 @@ export function useCalendarDrag<T>(options: CalendarDragOptions<T>) {
     const target = drop ? optionsRef.current.resolve(current) : null
     // A completed drag must not also count as a click on whatever is under the pointer.
     if (drop) {
-      const swallow = (event: MouseEvent) => { event.stopPropagation(); event.preventDefault() }
+      const swallow = (event: MouseEvent) => {
+        event.stopPropagation()
+        event.preventDefault()
+      }
       window.addEventListener('click', swallow, { capture: true, once: true })
       window.setTimeout(() => window.removeEventListener('click', swallow, { capture: true }), 0)
     }
@@ -137,9 +143,17 @@ export function useCalendarDrag<T>(options: CalendarDragOptions<T>) {
   const begin = useCallback((data: T, event: PointerEvent, geometry: BeginGeometry) => {
     if (session.current || event.button !== 0) return false
     const current: DragSession<T> = {
-      data, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, x: event.clientX, y: event.clientY,
-      grabX: Math.min(Math.max(geometry.grabX, 0), geometry.width), grabY: Math.min(Math.max(geometry.grabY, 0), geometry.height),
-      width: geometry.width, height: geometry.height, phase: 'pending',
+      data,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      x: event.clientX,
+      y: event.clientY,
+      grabX: Math.min(Math.max(geometry.grabX, 0), geometry.width),
+      grabY: Math.min(Math.max(geometry.grabY, 0), geometry.height),
+      width: geometry.width,
+      height: geometry.height,
+      phase: 'pending',
     }
     session.current = current
 
@@ -159,8 +173,12 @@ export function useCalendarDrag<T>(options: CalendarDragOptions<T>) {
       }
       dirty.current = true
     }
-    const onUp = (pointer: PointerEvent) => { if (pointer.pointerId === current.pointerId) finish(true) }
-    const onCancel = (pointer: PointerEvent) => { if (pointer.pointerId === current.pointerId) finish(false) }
+    const onUp = (pointer: PointerEvent) => {
+      if (pointer.pointerId === current.pointerId) finish(true)
+    }
+    const onCancel = (pointer: PointerEvent) => {
+      if (pointer.pointerId === current.pointerId) finish(false)
+    }
     const onKey = (key: KeyboardEvent) => {
       if (key.key !== 'Escape') return
       key.preventDefault()
@@ -189,8 +207,8 @@ export function useCalendarDrag<T>(options: CalendarDragOptions<T>) {
       setView(null)
     }
     return true
-  // tick/finish only read refs.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // tick/finish only read refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => () => teardownRef.current(), [])

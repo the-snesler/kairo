@@ -11,7 +11,7 @@
     "allowImportingTsExtensions": true,
     "types": ["vite/client", "unplugin-icons/types/react"],
     "baseUrl": ".",
-    "paths": {"@/*": ["./src/*"]}
+    "paths": { "@/*": ["./src/*"] }
   },
   "include": ["src", "vite.config.ts"]
 }

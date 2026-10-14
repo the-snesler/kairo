@@ -35,18 +35,32 @@ export function snap(minutes: number, step = SNAP_MINUTES) {
 
 /** Minutes into the day at a client Y coordinate inside a timed column whose top edge is at `zoneTop`. */
 export function pointerMinutes(clientY: number, zoneTop: number, hourHeight: number) {
-  return (clientY - zoneTop) / hourHeight * 60
+  return ((clientY - zoneTop) / hourHeight) * 60
 }
 
 /** Snapped start minute for an item of `durationMinutes` grabbed `grabMinutes` below its top edge, kept inside the day. */
-export function timedStart(clientY: number, zoneTop: number, hourHeight: number, grabMinutes: number, durationMinutes: number, step = SNAP_MINUTES) {
+export function timedStart(
+  clientY: number,
+  zoneTop: number,
+  hourHeight: number,
+  grabMinutes: number,
+  durationMinutes: number,
+  step = SNAP_MINUTES,
+) {
   const fit = Math.min(Math.max(durationMinutes, step), DAY_MINUTES)
   const latest = Math.floor((DAY_MINUTES - fit) / step) * step
   return clamp(snap(pointerMinutes(clientY, zoneTop, hourHeight) - grabMinutes, step), 0, latest)
 }
 
 /** Snapped end minute while resizing an item that starts at `startMinutes`: at least the minimum duration, at most midnight. */
-export function resizeEnd(clientY: number, zoneTop: number, hourHeight: number, startMinutes: number, step = SNAP_MINUTES, minDuration = MIN_DURATION_MINUTES) {
+export function resizeEnd(
+  clientY: number,
+  zoneTop: number,
+  hourHeight: number,
+  startMinutes: number,
+  step = SNAP_MINUTES,
+  minDuration = MIN_DURATION_MINUTES,
+) {
   return clamp(snap(pointerMinutes(clientY, zoneTop, hourHeight), step), startMinutes + minDuration, DAY_MINUTES)
 }
 
@@ -62,11 +76,18 @@ export function resolveTarget(hit: ZoneHit | null, clientY: number, options: Res
   if (!options.zones.includes(hit.zone)) return { zone: hit.zone, day: hit.day, invalid: true }
   if (hit.zone !== 'timed') return { zone: hit.zone, day: hit.day }
   const minutes = timedStart(clientY, hit.top, options.hourHeight, options.grabMinutes, options.durationMinutes)
-  return { zone: 'timed', day: hit.day, minutes, endMinutes: Math.min(DAY_MINUTES, minutes + Math.max(options.durationMinutes, MIN_DURATION_MINUTES)) }
+  return {
+    zone: 'timed',
+    day: hit.day,
+    minutes,
+    endMinutes: Math.min(DAY_MINUTES, minutes + Math.max(options.durationMinutes, MIN_DURATION_MINUTES)),
+  }
 }
 
 export function targetKey(target: DropTarget | null) {
-  return target ? `${target.zone}|${target.day}|${target.minutes ?? ''}|${target.endMinutes ?? ''}|${target.invalid ? 1 : 0}` : ''
+  return target
+    ? `${target.zone}|${target.day}|${target.minutes ?? ''}|${target.endMinutes ?? ''}|${target.invalid ? 1 : 0}`
+    : ''
 }
 
 /** Local midnight of a YYYY-MM-DD key. */
@@ -109,7 +130,11 @@ export function moveEvent(event: EventTimes, target: DropTarget, originDay: stri
   const end = parseEventDate(event.end, event.allDay)
   if (target.zone === 'timed' && target.minutes !== undefined) {
     const nextStart = wallClock(target.day, target.minutes)
-    return { start: nextStart.toISOString(), end: new Date(nextStart.getTime() + end.getTime() - start.getTime()).toISOString(), allDay: false }
+    return {
+      start: nextStart.toISOString(),
+      end: new Date(nextStart.getTime() + end.getTime() - start.getTime()).toISOString(),
+      allDay: false,
+    }
   }
   const delta = daysBetween(originDay, target.day)
   if (event.allDay) return { start: dayKey(addDays(start, delta)), end: dayKey(addDays(end, delta)), allDay: true }
@@ -118,8 +143,10 @@ export function moveEvent(event: EventTimes, target: DropTarget, originDay: stri
 
 /** Task due date for a drop. All-day row → date only; grid → date and time; month cell keeps any existing time of day. */
 export function taskDueForTarget(due: TaskDue | null, target: DropTarget): TaskDue {
-  if (target.zone === 'timed' && target.minutes !== undefined) return { dateTime: wallClock(target.day, target.minutes).toISOString() }
-  if (target.zone === 'month' && due && 'dateTime' in due) return { dateTime: wallClock(target.day, minuteOfDay(new Date(due.dateTime))).toISOString() }
+  if (target.zone === 'timed' && target.minutes !== undefined)
+    return { dateTime: wallClock(target.day, target.minutes).toISOString() }
+  if (target.zone === 'month' && due && 'dateTime' in due)
+    return { dateTime: wallClock(target.day, minuteOfDay(new Date(due.dateTime))).toISOString() }
   return { date: target.day }
 }
 

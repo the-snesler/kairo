@@ -40,22 +40,32 @@ export function formatTime(date: Date): string {
 }
 
 function shortTimeParts(date: Date): Intl.DateTimeFormatPart[] {
-  return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: date.getMinutes() ? '2-digit' : undefined }).formatToParts(date)
+  return new Intl.DateTimeFormat(undefined, {
+    hour: 'numeric',
+    minute: date.getMinutes() ? '2-digit' : undefined,
+  }).formatToParts(date)
 }
 
 /** Like formatTime, but drops ":00" on the hour ("4 PM"). */
 export function formatShortTime(date: Date): string {
-  return shortTimeParts(date).map(part => part.value).join('')
+  return shortTimeParts(date)
+    .map((part) => part.value)
+    .join('')
 }
 
 /** Compact range such as "4–5:15 PM", omitting the first day period when both ends share it. */
 export function formatTimeRange(start: Date, end: Date): string {
   const startParts = shortTimeParts(start)
   const endParts = shortTimeParts(end)
-  const period = (parts: Intl.DateTimeFormatPart[]) => parts.find(part => part.type === 'dayPeriod')?.value
-  const trimmed = period(startParts) !== undefined && period(startParts) === period(endParts)
-    ? startParts.filter(part => part.type !== 'dayPeriod').map(part => part.value).join('').trim()
-    : formatShortTime(start)
+  const period = (parts: Intl.DateTimeFormatPart[]) => parts.find((part) => part.type === 'dayPeriod')?.value
+  const trimmed =
+    period(startParts) !== undefined && period(startParts) === period(endParts)
+      ? startParts
+          .filter((part) => part.type !== 'dayPeriod')
+          .map((part) => part.value)
+          .join('')
+          .trim()
+      : formatShortTime(start)
   return `${trimmed}–${formatShortTime(end)}`
 }
 

@@ -226,11 +226,7 @@
   position: relative;
 }
 .cal-time-day {
-  background-image: linear-gradient(
-    to bottom,
-    var(--cal-line) 1px,
-    transparent 1px
-  );
+  background-image: linear-gradient(to bottom, var(--cal-line) 1px, transparent 1px);
   background-size: 100% var(--hour-height);
   border-left: 1px solid var(--cal-line);
   box-sizing: border-box;
@@ -303,7 +299,7 @@
 .cal-now-line::before {
   background: #ec6159;
   border-radius: 50%;
-  content: "";
+  content: '';
   height: 7px;
   left: -3px;
   position: absolute;
@@ -341,7 +337,7 @@
 .cal-event-committed::before {
   background: var(--calendar-bar-color);
   bottom: 0;
-  content: "";
+  content: '';
   left: 0;
   position: absolute;
   top: 0;
@@ -473,7 +469,9 @@
   z-index: 1000;
 }
 .cal-drag-ghost .cal-event {
-  box-shadow: 0 10px 24px #0008, 0 0 0 1px var(--cal-surface);
+  box-shadow:
+    0 10px 24px #0008,
+    0 0 0 1px var(--cal-surface);
   filter: brightness(1.08);
   height: 100%;
 }
@@ -507,11 +505,7 @@ html.cal-drag-active.cal-drag-invalid * {
   color: color-mix(in srgb, var(--cal-text), var(--cal-surface) 25%);
 }
 .cal-event-dashed.cal-event-past {
-  border-color: color-mix(
-    in srgb,
-    var(--calendar-color),
-    var(--cal-surface) 42%
-  );
+  border-color: color-mix(in srgb, var(--calendar-color), var(--cal-surface) 42%);
 }
 .cal-event-resize {
   bottom: 0;
