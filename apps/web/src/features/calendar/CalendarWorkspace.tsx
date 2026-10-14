@@ -50,7 +50,7 @@ function eventStyle(event: CalendarEvent, past: boolean): CSSProperties {
     "--calendar-color": calendar,
     "--event-color": eventColor,
     "--event-body":
-      event.kind === "external"
+      event.kind === "external" && event.decision !== 'yes' && event.decision !== 'maybe'
         ? "transparent"
         : event.kind === "task"
           ? `color-mix(in srgb, ${eventColor} ${past ? "10%" : "18%"}, var(--cal-surface))`
@@ -128,6 +128,8 @@ function EventCard({
   const end = parseEventDate(event.end, event.allDay);
   const inline = compact || titleLines < 1;
   const task = event.kind === "task";
+  const committed = event.kind === 'external' && (event.decision === 'yes' || event.decision === 'maybe');
+  const tentative = event.kind === 'external' && event.decision === 'maybe';
   const completed = !!event.task?.completed;
   const time = timeLabel ?? (inTopBar(event)
     ? ""
@@ -137,7 +139,7 @@ function EventCard({
   const showTime = !!time && !(narrow && inline && timeLabel === undefined);
   return (
     <div
-      className={`cal-event ${compact ? "cal-event-compact" : ""} ${inline ? "cal-event-inline" : ""} ${isDashed(event) ? "cal-event-dashed" : ""} ${event.declined ? "cal-event-declined" : ""} ${task ? "cal-event-task" : ""} ${completed ? "cal-event-completed" : ""} ${event.task?.pending ? "cal-event-pending" : ""} ${past ? "cal-event-past" : ""} ${draggable ? "cal-event-draggable" : ""} ${dragging ? "cal-event-dragging" : ""}`}
+      className={`cal-event ${compact ? "cal-event-compact" : ""} ${inline ? "cal-event-inline" : ""} ${isDashed(event) ? "cal-event-dashed" : ""} ${committed ? "cal-event-committed" : ""} ${tentative ? "cal-event-tentative" : ""} ${event.declined ? "cal-event-declined" : ""} ${task ? "cal-event-task" : ""} ${completed ? "cal-event-completed" : ""} ${event.task?.pending ? "cal-event-pending" : ""} ${past ? "cal-event-past" : ""} ${draggable ? "cal-event-draggable" : ""} ${dragging ? "cal-event-dragging" : ""}`}
       style={
         {
           ...eventStyle(event, past),

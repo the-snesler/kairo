@@ -320,6 +320,7 @@
   box-shadow: 0 0 0 1px var(--cal-surface);
 }
 .cal-event {
+  --calendar-bar-color: var(--calendar-color);
   background: var(--event-body);
   border: 1px solid color-mix(in srgb, var(--calendar-color), transparent 70%);
   border-radius: 6px;
@@ -336,14 +337,22 @@
   position: relative;
   user-select: none;
 }
-.cal-event:not(.cal-event-dashed):not(.cal-event-task)::before {
-  background: var(--calendar-color);
+.cal-event:not(.cal-event-dashed):not(.cal-event-task)::before,
+.cal-event-committed::before {
+  background: var(--calendar-bar-color);
   bottom: 0;
   content: "";
   left: 0;
   position: absolute;
   top: 0;
   width: 3px;
+}
+.cal-event-tentative::before {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--calendar-bar-color) 0 2px,
+    color-mix(in srgb, var(--calendar-bar-color), var(--cal-surface) 75%) 2px 4px
+  );
 }
 .cal-event:hover {
   filter: brightness(1.13);
@@ -486,7 +495,6 @@ html.cal-drag-active.cal-drag-invalid * {
   cursor: no-drop !important;
 }
 .cal-event-dashed {
-  background: transparent;
   border: 1.5px dashed var(--calendar-color);
   color: var(--cal-text);
 }
@@ -495,10 +503,8 @@ html.cal-drag-active.cal-drag-invalid * {
   text-decoration: line-through;
 }
 .cal-event-past {
+  --calendar-bar-color: color-mix(in srgb, var(--calendar-color), var(--cal-surface) 42%);
   color: color-mix(in srgb, var(--cal-text), var(--cal-surface) 25%);
-}
-.cal-event-past:not(.cal-event-dashed):not(.cal-event-task)::before {
-  background: color-mix(in srgb, var(--calendar-color), var(--cal-surface) 42%);
 }
 .cal-event-dashed.cal-event-past {
   border-color: color-mix(
