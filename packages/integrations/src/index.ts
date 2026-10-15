@@ -1,4 +1,6 @@
 export * from './google/index.js'
+export * from './google/recurrence.js'
+export * from './google/series.js'
 export * from './ics/index.js'
 export * from './todoist/index.js'
 export * from './tasks.js'

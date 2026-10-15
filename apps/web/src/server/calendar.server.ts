@@ -22,7 +22,7 @@ import {
   syncTaskBlocks,
 } from '@kairo/core'
 import { closestEventColorId, GOOGLE_EVENT_COLORS, GoogleApiError, type GoogleEvent } from '@kairo/integrations'
-import type { CalendarEvent } from '../features/calendar/types'
+import type { CalendarEvent, RecurringEventPatch, RecurringScope } from '../features/calendar/types'
 import type { TaskSummary } from '../features/tasks/types'
 import { getAuthStatus, getSession, requireUser } from './auth'
 import {
@@ -34,6 +34,7 @@ import {
   taskMirrorCalendarId,
   taskProviders,
 } from './sync'
+import { deleteRecurringEventForUser, getAdjacentOccurrenceForUser, saveRecurringEventForUser } from './recurring'
 
 async function ownedCalendar(userId: string, calendarId: string) {
   const [row] = await db
@@ -53,6 +54,11 @@ async function ownedExternal(userId: string, eventId: string) {
     .where(and(eq(externalEvent.id, eventId), eq(icsSource.ownerUserId, userId)))
   if (!row) throw new Response('Event unavailable', { status: 404 })
   return row.event
+}
+
+const recurrenceOf = (rawJson: string | null): string[] | undefined => {
+  const lines = (JSON.parse(rawJson || '{}') as GoogleEvent).recurrence
+  return lines?.length ? lines : undefined
 }
 
 function intersects(start: string, end: string, rangeStart: Date, rangeEnd: Date) {
@@ -131,7 +137,7 @@ export async function getCalendarSnapshotImpl(data: { start: string; end: string
   const events: CalendarEvent[] = []
   const recurringCalendars = new Set(
     storedGoogle
-      .filter((item) => calIds.has(item.calendarId) && !!JSON.parse(item.rawJson || '{}').recurrence)
+      .filter((item) => calIds.has(item.calendarId) && !!recurrenceOf(item.rawJson))
       .map((item) => item.calendarId),
   )
   const expandedCalendars = new Set<string>()
@@ -155,6 +161,19 @@ export async function getCalendarSnapshotImpl(data: { start: string; end: string
         const parent = storedGoogle.find(
           (row) => row.calendarId === calendarId && row.googleEventId === item.recurringEventId,
         )
+        const parentGoogle = parent && (JSON.parse(parent.rawJson || '{}') as GoogleEvent)
+        const recurrence = parent && recurrenceOf(parent.rawJson)
+        const originalStart = item.originalStartTime?.dateTime ?? item.originalStartTime?.date
+        // Occurrences are editable only when their series master is stored locally.
+        const series =
+          parent && recurrence && originalStart
+            ? {
+                masterId: parent.id,
+                instanceId: item.id,
+                originalStart,
+                timeZone: parentGoogle?.start?.timeZone ?? item.start?.timeZone,
+              }
+            : undefined
         events.push({
           id: `instance:${calendarId}:${item.id}`,
           kind: 'google',
@@ -169,8 +188,10 @@ export async function getCalendarSnapshotImpl(data: { start: string; end: string
           declined: item.attendees?.some((attendee) => attendee.self && attendee.responseStatus === 'declined'),
           description: item.description,
           location: item.location,
-          editable: false,
+          editable: !!series && (local.accessRole === 'owner' || local.accessRole === 'writer'),
           recurring: true,
+          recurrence: series && recurrence,
+          series,
         })
       }
       expandedCalendars.add(calendarId)
@@ -180,11 +201,8 @@ export async function getCalendarSnapshotImpl(data: { start: string; end: string
   }
   for (const item of storedGoogle) {
     if (!calIds.has(item.calendarId) || item.status === 'cancelled' || item.projectionId || item.taskBlockId) continue
-    if (
-      expandedCalendars.has(item.calendarId) &&
-      (!!JSON.parse(item.rawJson || '{}').recurrence || !!item.recurringEventId)
-    )
-      continue
+    const recurring = !!item.recurringEventId || !!item.originalStartTime || !!recurrenceOf(item.rawJson)
+    if (expandedCalendars.has(item.calendarId) && recurring) continue
     const cal = calendars.find((candidate) => candidate.id === item.calendarId)!
     const eventStart = item.allDay ? item.startDate : item.startAt?.toISOString()
     const eventEnd = item.allDay ? item.endDate : item.endAt?.toISOString()
@@ -203,8 +221,9 @@ export async function getCalendarSnapshotImpl(data: { start: string; end: string
       declined: item.responseStatus === 'declined',
       description: item.description || undefined,
       location: item.location || undefined,
-      editable: cal.accessRole === 'owner' || cal.accessRole === 'writer',
-      recurring: !!item.recurringEventId || !!item.originalStartTime || !!JSON.parse(item.rawJson || '{}').recurrence,
+      // Un-expanded series (range expansion failed) stay read-only.
+      editable: !recurring && (cal.accessRole === 'owner' || cal.accessRole === 'writer'),
+      recurring,
     })
   }
   for (const item of storedExternal) {
@@ -548,6 +567,8 @@ export async function saveGoogleEventImpl(data: {
   eventColor?: string
   description?: string
   location?: string
+  recurrence?: string[] | null
+  timeZone?: string
 }) {
   const user = await requireUser()
   const cal = await ownedCalendar(user.id, data.calendarId)
@@ -561,6 +582,15 @@ export async function saveGoogleEventImpl(data: {
     start: data.allDay ? { date: data.start.slice(0, 10) } : { dateTime: data.start },
     end: data.allDay ? { date: data.end.slice(0, 10) } : { dateTime: data.end },
   }
+  if (data.recurrence?.length) {
+    // Google requires a zone on the start/end of recurring timed events.
+    body.recurrence = data.recurrence
+    const timeZone = data.timeZone || cal.timeZone || 'UTC'
+    if (!data.allDay) {
+      body.start = { dateTime: data.start, timeZone }
+      body.end = { dateTime: data.end, timeZone }
+    }
+  }
   if (data.eventColor) body.colorId = closestEventColorId(data.eventColor)
   let remote
   let oldColor: string | null = null
@@ -573,8 +603,8 @@ export async function saveGoogleEventImpl(data: {
       .where(and(eq(googleEvent.id, data.id), eq(accountAccess.userId, user.id)))
     const old = row?.event
     if (!old || old.projectionId || old.taskBlockId) throw new Response('Event unavailable', { status: 404 })
-    if (old.recurringEventId || old.originalStartTime || JSON.parse(old.rawJson || '{}').recurrence)
-      throw new Error('Recurring event editing is not yet supported')
+    if (old.recurringEventId || old.originalStartTime || recurrenceOf(old.rawJson))
+      throw new Error('Edit recurring events with a scope (this, following or all events)')
     oldColor = old.color
     if (old.calendarId !== cal.id) {
       const { client: sourceClient } = await clientForCalendar(old.calendarId, user.id)
@@ -606,10 +636,30 @@ export async function deleteGoogleEventImpl(data: { id: string }) {
     .where(and(eq(googleEvent.id, data.id), eq(accountAccess.userId, user.id)))
   if (!row || row.event.projectionId || row.event.taskBlockId) throw new Response('Event unavailable', { status: 404 })
   if (!['owner', 'writer'].includes(row.cal.accessRole || '')) throw new Error('Calendar is read only')
-  if (row.event.recurringEventId || row.event.originalStartTime || JSON.parse(row.event.rawJson || '{}').recurrence)
-    throw new Error('Recurring event deletion is not yet supported')
+  if (row.event.recurringEventId || row.event.originalStartTime || recurrenceOf(row.event.rawJson))
+    throw new Error('Delete recurring events with a scope (this, following or all events)')
   const { client } = await clientForCalendar(row.cal.id, user.id)
   await client.deleteEvent(row.cal.googleCalendarId, row.event.googleEventId, row.event.etag || undefined)
   await db.delete(googleEvent).where(eq(googleEvent.id, row.event.id))
   return { ok: true }
+}
+
+export async function saveRecurringEventImpl(data: {
+  id: string
+  scope: RecurringScope
+  patch: RecurringEventPatch
+  timeZone?: string
+}) {
+  const user = await requireUser()
+  return saveRecurringEventForUser(user.id, data)
+}
+
+export async function deleteRecurringEventImpl(data: { id: string; scope: RecurringScope }) {
+  const user = await requireUser()
+  return deleteRecurringEventForUser(user.id, data)
+}
+
+export async function getAdjacentOccurrenceImpl(data: { id: string; direction: 'prev' | 'next' }) {
+  const user = await requireUser()
+  return getAdjacentOccurrenceForUser(user.id, data)
 }

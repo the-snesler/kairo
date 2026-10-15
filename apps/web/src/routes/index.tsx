@@ -7,6 +7,7 @@ import IconCircleDashed from '~icons/tabler/circle-dashed'
 import IconPlus from '~icons/tabler/plus'
 import IconX from '~icons/tabler/x'
 import { CalendarWorkspace, type CalendarEvent } from '../features/calendar/CalendarWorkspace'
+import type { RecurringEventPatch, RecurringScope } from '../features/calendar/types'
 import { Sidebar } from '../features/shell/Sidebar'
 import { ProjectionConflicts } from '../features/shell/ProjectionConflicts'
 import { TaskPopover, type TaskChange } from '../features/tasks/TaskPopover'
@@ -15,10 +16,13 @@ import {
   decideExternalEvent,
   deleteGoogleEvent,
   deleteIcsFeed,
+  deleteRecurringEvent,
+  getAdjacentOccurrence,
   getCalendarSnapshot,
   getViewer,
   resolveProjectionConflict,
   saveGoogleEvent,
+  saveRecurringEvent,
   setCalendarRole,
   setCalendarVisibility,
   syncNow,
@@ -29,6 +33,9 @@ import '../features/shell/app.css'
 export const Route = createFileRoute('/')({ loader: () => getViewer(), component: Home })
 
 type Snapshot = Awaited<ReturnType<typeof getCalendarSnapshot>>
+
+const browserTimeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone
+const isoDate = (value: string) => new Date(value).toISOString()
 
 function Home() {
   const viewer = Route.useLoaderData()
@@ -221,8 +228,23 @@ function Dashboard({ user }: { user: { id: string; name: string; email: string }
           eventColor: event.eventColor,
           description: event.description,
           location: event.location,
+          recurrence: event.recurrence?.length ? event.recurrence : null,
+          timeZone: browserTimeZone(),
         },
       }),
+    )
+  }
+
+  async function recurringSave(event: CalendarEvent, patch: RecurringEventPatch, scope: RecurringScope) {
+    // All-day occurrences keep YYYY-MM-DD dates; timed ones are sent as UTC instants.
+    const date = (value: string) => ((patch.allDay ?? event.allDay) ? value.slice(0, 10) : isoDate(value))
+    const data = {
+      ...patch,
+      ...(patch.start ? { start: date(patch.start) } : {}),
+      ...(patch.end ? { end: date(patch.end) } : {}),
+    }
+    await mutation(() =>
+      saveRecurringEvent({ data: { id: event.id, scope, patch: data, timeZone: browserTimeZone() } }),
     )
   }
 
@@ -255,6 +277,8 @@ function Dashboard({ user }: { user: { id: string; name: string; email: string }
           eventColor: event.eventColor,
           description: event.description,
           location: event.location,
+          recurrence: event.recurrence?.length ? event.recurrence : null,
+          timeZone: browserTimeZone(),
         },
       }),
     )
@@ -420,6 +444,11 @@ function Dashboard({ user }: { user: { id: string; name: string; email: string }
             onEventChange={eventSave}
             onEventCreate={eventCreate}
             onEventDelete={(event) => mutation(() => deleteGoogleEvent({ data: { id: event.id } }))}
+            onRecurringEventChange={recurringSave}
+            onRecurringEventDelete={(event, scope) =>
+              mutation(() => deleteRecurringEvent({ data: { id: event.id, scope } }))
+            }
+            onFindOccurrence={(event, direction) => getAdjacentOccurrence({ data: { id: event.id, direction } })}
             onDecisionChange={(event, state, calendarId) =>
               mutation(() => decideExternalEvent({ data: { eventId: event.id, state, calendarId } }))
             }

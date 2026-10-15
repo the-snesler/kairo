@@ -36,13 +36,41 @@ import { useCalendarDrag } from './dnd/useCalendarDrag'
 import type { DragSession } from './dnd/useCalendarDrag'
 import { EventPopover } from './EventPopover'
 import type { EventDraft } from './EventPopover'
-import type { CalendarEvent, CalendarView, CalendarWorkspaceProps, EventDecision } from './types'
+import { diffRecurring, isEmptyPatch } from './recurring'
+import { RecurringScopeDialog } from './RecurringScopeDialog'
+import type {
+  CalendarEvent,
+  CalendarView,
+  CalendarWorkspaceProps as BaseWorkspaceProps,
+  EventDecision,
+  RecurringEventPatch,
+  RecurringScope,
+} from './types'
 import type { InspectorAnchor } from '../inspector/fields'
 import { formatDuration } from '../tasks/grouping'
 import type { TaskSummary } from '../tasks/types'
 import './calendar.css'
 
-export type { CalendarEvent, CalendarOption, CalendarView, CalendarWorkspaceProps, EventDecision } from './types'
+export type { CalendarEvent, CalendarOption, CalendarView, EventDecision } from './types'
+
+export interface OccurrenceRef {
+  id: string
+  start: string
+  end: string
+  allDay: boolean
+}
+
+export interface CalendarWorkspaceProps extends BaseWorkspaceProps {
+  /** Saves an edit to an occurrence of a repeating event (`event` is the occurrence as it was before the edit). */
+  onRecurringEventChange?: (
+    event: CalendarEvent,
+    patch: RecurringEventPatch,
+    scope: RecurringScope,
+  ) => void | Promise<void>
+  onRecurringEventDelete?: (event: CalendarEvent, scope: RecurringScope) => void | Promise<void>
+  /** The occurrence before or after `event` in its series, if any. */
+  onFindOccurrence?: (event: CalendarEvent, direction: 'prev' | 'next') => Promise<OccurrenceRef | null>
+}
 
 const STRIP_DAYS = 35
 const STRIP_REBASE_DAYS = 14
@@ -84,8 +112,37 @@ function isDashed(event: CalendarEvent) {
 }
 
 function canEdit(event: CalendarEvent) {
-  return event.editable !== false && event.kind !== 'external' && event.kind !== 'task' && !event.recurring
+  // Occurrences of a series are editable through scoped saves; recurring events without a series ref are not.
+  return (
+    event.editable !== false &&
+    event.kind !== 'external' &&
+    event.kind !== 'task' &&
+    (!event.recurring || !!event.series)
+  )
 }
+
+/** An occurrence edit held back until the user picks which occurrences it applies to. */
+interface PendingEdit {
+  original: CalendarEvent
+  changed: CalendarEvent
+}
+
+interface ScopePrompt {
+  mode: 'edit' | 'delete'
+  /** The occurrence to delete (delete mode). */
+  event?: CalendarEvent
+  busy?: boolean
+  error?: string
+  /** Where to reopen the editor on "Continue editing". */
+  anchor?: InspectorAnchor
+  /** Runs once the pending edit is saved or discarded. */
+  then?: () => void
+}
+
+/** Anchor in the middle of the viewport, for when an event's card isn't on screen. */
+const centerAnchor = (): InspectorAnchor => ({
+  getBoundingClientRect: () => new DOMRect(window.innerWidth / 2 - 160, window.innerHeight / 4, 0, 0),
+})
 
 function eventMinutes(event: CalendarEvent) {
   if (event.kind === 'task' && event.task) return event.task.durationMinutes
@@ -149,6 +206,7 @@ function EventCard({
   past,
   draggable,
   dragging,
+  edited,
   timeLabel,
   onOpen,
   onPointerDown,
@@ -164,6 +222,8 @@ function EventCard({
   draggable?: boolean
   /** The original card while a drag of it is in progress. */
   dragging?: boolean
+  /** Shows unsaved changes waiting for a recurring-scope choice. */
+  edited?: boolean
   /** Replaces the computed time text. */
   timeLabel?: string
   onOpen?: (element: HTMLElement, event: CalendarEvent) => void
@@ -188,9 +248,10 @@ function EventCard({
           '--title-lines': Math.max(titleLines, 1),
         } as CSSProperties
       }
+      data-event-id={event.id}
       role="button"
       tabIndex={0}
-      aria-label={`${task ? 'Task: ' : ''}${event.title}${time ? `, ${time}` : ''}`}
+      aria-label={`${task ? 'Task: ' : ''}${event.title}${time ? `, ${time}` : ''}${edited ? ', unsaved changes' : ''}`}
       onClick={(e) => {
         e.stopPropagation()
         onOpen?.(e.currentTarget, event)
@@ -221,6 +282,7 @@ function EventCard({
             {completed && <IconCheck aria-hidden="true" />}
           </button>
         )}
+        {edited && <span className="cal-event-dot" aria-hidden="true" />}
         {event.title}
       </span>
       {showTime && <span className="cal-event-time">{time}</span>}
@@ -249,6 +311,12 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
   const [deleted, setDeleted] = useState<string[]>([])
   const [taskOverrides, setTaskOverrides] = useState<Record<string, CalendarEvent>>({})
   const [dropError, setDropError] = useState('')
+  const [pending, setPendingState] = useState<PendingEdit | null>(null)
+  const pendingRef = useRef<PendingEdit | null>(null)
+  const [prompt, setPrompt] = useState<ScopePrompt | null>(null)
+  const [awaiting, setAwaiting] = useState<{ id: string; anchor: InspectorAnchor } | null>(null)
+  // Bumped whenever the editor opens something, so a slower prev/next lookup doesn't take over afterwards.
+  const navToken = useRef(0)
   const [stripStart, setStripStart] = useState(() =>
     addDays(startOfWeek(props.date ?? props.initialDate ?? new Date()), -14),
   )
@@ -275,6 +343,7 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
       .filter((event) => !deleted.includes(event.id))
       .map((event) => {
         const current =
+          (pending?.original.id === event.id ? pending.changed : undefined) ??
           (event.kind === 'task' && event.taskId ? taskOverrides[event.taskId] : undefined) ??
           overrides[event.id] ??
           event
@@ -284,7 +353,7 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
           : current
       })
       .filter((event) => showDeclined || (!event.declined && event.status !== 'declined' && event.decision !== 'no'))
-  }, [sourceEvents, props.calendars, created, deleted, overrides, taskOverrides, showDeclined, editor?.draft])
+  }, [sourceEvents, props.calendars, created, deleted, overrides, taskOverrides, showDeclined, editor?.draft, pending])
 
   useEffect(() => {
     stripStartRef.current = stripStart
@@ -449,11 +518,12 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
     }
   }
 
-  const jumpToday = () => {
-    setDate(today)
-    if (view === 'month') reportDays(startOfWeek(new Date(today.getFullYear(), today.getMonth(), 1)), 42)
+  const jumpTo = (target: Date) => {
+    const day = startOfDay(target)
+    setDate(day)
+    if (view === 'month') reportDays(startOfWeek(new Date(day.getFullYear(), day.getMonth(), 1)), 42)
     else {
-      const first = view === 'week' ? startOfWeek(today) : today
+      const first = view === 'week' ? startOfWeek(day) : day
       stripStartRef.current = addDays(first, -14)
       setStripStart(stripStartRef.current)
       if (scroller.current) scroller.current.scrollLeft = 14 * columnWidth
@@ -461,8 +531,35 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
     }
   }
 
+  const jumpToday = () => jumpTo(today)
+
+  const setPending = (next: PendingEdit | null) => {
+    pendingRef.current = next
+    setPendingState(next)
+  }
+  const hasPendingChanges = () => {
+    const current = pendingRef.current
+    return !!current && !isEmptyPatch(diffRecurring(current.original, current.changed))
+  }
+  /** Runs `next` now, or after the user saves or discards the pending occurrence edit. */
+  const afterPending = (next: () => void, anchor?: InspectorAnchor) => {
+    if (hasPendingChanges()) {
+      setEditor(null)
+      setPrompt({ mode: 'edit', anchor, then: next })
+      return
+    }
+    setPending(null)
+    next()
+  }
+  const cardAnchor = (id: string) =>
+    root.current?.querySelector<HTMLElement>(`[data-event-id="${CSS.escape(id)}"]`) ?? null
+
   const openEditor = (element: HTMLElement, event: CalendarEvent | null, draft: EventDraft | null = null) => {
-    if (event?.id === DRAFT_ID) return
+    if (event?.id === DRAFT_ID || prompt) return
+    if (pendingRef.current && event?.id !== pendingRef.current.original.id)
+      return afterPending(() => openEditor(element, event, draft), editor?.anchor)
+    navToken.current++
+    setAwaiting(null)
     if (event?.kind === 'task') {
       if (event.taskId) props.onTaskOpen?.(event.taskId, element)
       return
@@ -474,6 +571,10 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
     const start = addMinutes(day, allDay ? 0 : minutes)
     const end = allDay ? addDays(day, 1) : addMinutes(start, 60)
     const calendar = props.calendars?.[0]
+    if (prompt) return
+    if (pendingRef.current) return afterPending(() => createAt(element, day, minutes, allDay), editor?.anchor)
+    navToken.current++
+    setAwaiting(null)
     const draft: EventDraft = {
       title: '',
       start: allDay ? dayKey(start) : start.toISOString(),
@@ -540,10 +641,28 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
     if (editor?.eventId && !editingEvent) setEditor(null)
   }, [editor?.eventId, editingEvent])
 
+  // After jumping to another occurrence, open it once it has loaded and rendered.
+  useEffect(() => {
+    if (!awaiting || !visibleEvents.some((event) => event.id === awaiting.id)) return
+    const frame = requestAnimationFrame(() => {
+      const fallback = !(awaiting.anchor instanceof Element) || awaiting.anchor.isConnected ? awaiting.anchor : null
+      setEditor({ eventId: awaiting.id, draft: null, anchor: cardAnchor(awaiting.id) ?? fallback ?? centerAnchor() })
+      setAwaiting(null)
+    })
+    return () => cancelAnimationFrame(frame)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [awaiting, visibleEvents])
+  // Give up on an occurrence that never shows up (e.g. hidden as declined) instead of opening it much later.
+  useEffect(() => {
+    if (!awaiting) return
+    const timer = setTimeout(() => setAwaiting((current) => (current === awaiting ? null : current)), 10_000)
+    return () => clearTimeout(timer)
+  }, [awaiting])
+
+  const canEditEvent = (event: CalendarEvent) =>
+    canEdit(event) && (event.series ? !!props.onRecurringEventChange : !!props.onEventChange)
   const canDrag = (event: CalendarEvent) =>
-    event.kind === 'task'
-      ? event.editable !== false && !!event.taskId && !!props.onTaskChange
-      : canEdit(event) && !!props.onEventChange
+    event.kind === 'task' ? event.editable !== false && !!event.taskId && !!props.onTaskChange : canEditEvent(event)
 
   const reportError = (cause: unknown, fallback: string) =>
     setDropError(cause instanceof Error ? cause.message : fallback)
@@ -598,6 +717,116 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
     saves.delete(changed.id)
   }
 
+  /** Holds an occurrence edit locally; it's saved once a scope is chosen. */
+  const stageEdit = (base: CalendarEvent, changed: CalendarEvent) => {
+    const current = pendingRef.current
+    setPending({ original: current?.original.id === changed.id ? current.original : base, changed })
+  }
+  const stageDrop = (item: CalendarEvent, changed: CalendarEvent) => {
+    const current = pendingRef.current
+    if (prompt || (current && current.original.id !== item.id)) return
+    setEditor(null)
+    stageEdit(item, changed)
+    if (hasPendingChanges()) setPrompt({ mode: 'edit', anchor: cardAnchor(item.id) ?? undefined })
+    else setPending(null)
+  }
+
+  const closeEditor = () => {
+    const current = pendingRef.current
+    if (current && editor?.eventId === current.original.id) {
+      if (hasPendingChanges()) setPrompt({ mode: 'edit', anchor: editor.anchor })
+      else setPending(null)
+    }
+    setEditor(null)
+  }
+
+  const reopenPending = (anchor?: InspectorAnchor) => {
+    const current = pendingRef.current
+    if (!current) return
+    const element = cardAnchor(current.original.id)
+    const fallback = anchor && (!(anchor instanceof Element) || anchor.isConnected) ? anchor : centerAnchor()
+    setEditor({ eventId: current.original.id, draft: null, anchor: element ?? fallback })
+  }
+
+  const message = (cause: unknown, fallback: string) => (cause instanceof Error ? cause.message : fallback)
+
+  const confirmScope = async (scope: RecurringScope) => {
+    const current = prompt
+    if (!current || current.busy) return
+    if (current.mode === 'delete') {
+      const event = current.event!
+      setPrompt({ ...current, busy: true, error: '' })
+      try {
+        await props.onRecurringEventDelete?.(event, scope)
+        if (scope === 'this') setDeleted((ids) => [...ids, event.id])
+        setPrompt(null)
+      } catch (cause) {
+        setPrompt({ ...current, busy: false, error: message(cause, 'Could not delete event.') })
+      }
+      return
+    }
+    const edit = pendingRef.current
+    if (!edit) return setPrompt(null)
+    const patch = diffRecurring(edit.original, edit.changed)
+    if (scope === 'this') {
+      // A single occurrence changes in place: show it right away and let the snapshot catch up.
+      const optimistic = edit.changed
+      setOverrides((overrides) => ({ ...overrides, [edit.original.id]: optimistic }))
+      setPending(null)
+      setPrompt(null)
+      current.then?.()
+      try {
+        await props.onRecurringEventChange?.(edit.original, patch, scope)
+      } catch (cause) {
+        setOverrides((overrides) => {
+          if (overrides[edit.original.id] !== optimistic) return overrides
+          const rest = { ...overrides }
+          delete rest[edit.original.id]
+          return rest
+        })
+        if (!pendingRef.current) {
+          setPending(edit)
+          setPrompt({ mode: 'edit', anchor: current.anchor, error: message(cause, 'Could not save event.') })
+        } else reportError(cause, 'Could not save event.')
+      }
+      return
+    }
+    setPrompt({ ...current, busy: true, error: '' })
+    try {
+      await props.onRecurringEventChange?.(edit.original, patch, scope)
+      setPending(null)
+      setPrompt(null)
+      current.then?.()
+    } catch (cause) {
+      setPrompt({ ...current, busy: false, error: message(cause, 'Could not save event.') })
+    }
+  }
+
+  const deleteOccurrence = (event: CalendarEvent) => {
+    const original = pendingRef.current?.original.id === event.id ? pendingRef.current.original : event
+    setPending(null)
+    setEditor(null)
+    setPrompt({ mode: 'delete', event: original })
+  }
+
+  const navigateOccurrence = (event: CalendarEvent, direction: 'prev' | 'next') => {
+    const find = props.onFindOccurrence
+    if (!find) return
+    const anchor = editor?.anchor ?? centerAnchor()
+    afterPending(() => {
+      setDropError('')
+      const token = ++navToken.current
+      find(event, direction)
+        .then((found) => {
+          if (token !== navToken.current) return
+          if (!found) return reportError(null, `No ${direction === 'prev' ? 'earlier' : 'later'} occurrence.`)
+          jumpTo(parseEventDate(found.start, found.allDay))
+          setAwaiting({ id: found.id, anchor })
+        })
+        .catch((cause) => reportError(cause, 'Could not find that occurrence.'))
+    }, anchor)
+  }
+
   const hitTest = (x: number, y: number): ZoneHit | null => {
     const zone = document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-drop-zone]')
     if (!zone || !root.current?.contains(zone) || !zone.dataset.day) return null
@@ -644,7 +873,11 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
           if (durationMinutes !== item.task?.durationMinutes) void commitTask(item, { durationMinutes })
           return
         }
-        if (end.getTime() !== parseEventDate(item.end).getTime()) void commitEvent({ ...item, end: end.toISOString() })
+        if (end.getTime() !== parseEventDate(item.end).getTime()) {
+          const changed = { ...item, end: end.toISOString() }
+          if (item.series) stageDrop(item, changed)
+          else void commitEvent(changed)
+        }
         return
       }
       if (item.kind === 'task') {
@@ -654,8 +887,10 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
         return
       }
       const moved = moveEvent(item, target, data.originDay)
-      if (parseEventDate(moved.start, moved.allDay).getTime() !== parseEventDate(item.start, item.allDay).getTime())
-        void commitEvent({ ...item, ...moved })
+      if (parseEventDate(moved.start, moved.allDay).getTime() !== parseEventDate(item.start, item.allDay).getTime()) {
+        if (item.series) stageDrop(item, { ...item, ...moved })
+        else void commitEvent({ ...item, ...moved })
+      }
     },
     scrollArea: ({ data }) => {
       const element = scroller.current
@@ -768,6 +1003,7 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
   const cardProps = (event: CalendarEvent) => ({
     draggable: canDrag(event),
     dragging: isDragged(event),
+    edited: pending?.original.id === event.id,
     onPointerDown: startDrag,
     onOpen: openEditor,
     onToggleComplete: event.kind === 'task' && props.onTaskChange ? toggleComplete : undefined,
@@ -1110,13 +1346,51 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
           draft={editingEvent ? null : editor.draft}
           anchor={editor.anchor}
           calendars={props.calendars ?? []}
-          editable={!!editingEvent && canEdit(editingEvent) && !!props.onEventChange}
-          onClose={() => setEditor(null)}
-          onChange={(changed) => void commitEvent(changed)}
+          editable={!!editingEvent && canEditEvent(editingEvent)}
+          onClose={closeEditor}
+          onChange={(changed) => {
+            if (changed.series) return stageEdit(editingEvent!, changed)
+            // A single event whose repeat rule changes becomes a series with new occurrence ids once saved; further
+            // edits must go through those, so close the editor rather than saving against the old single event.
+            if (editingEvent && 'recurrence' in diffRecurring(editingEvent, changed)) setEditor(null)
+            void commitEvent(changed)
+          }}
           onDraftChange={(draft) => setEditor((current) => current && { ...current, draft })}
           onCreate={props.onEventCreate ? createEvent : undefined}
           onDelete={props.onEventDelete ? deleteEvent : undefined}
+          onDeleteOccurrence={props.onRecurringEventDelete ? deleteOccurrence : undefined}
+          onNavigateOccurrence={props.onFindOccurrence ? navigateOccurrence : undefined}
           onDecide={props.onDecisionChange ? decide : undefined}
+        />
+      )}
+      {prompt?.mode === 'delete' && prompt.event && (
+        <RecurringScopeDialog
+          mode="delete"
+          original={prompt.event}
+          busy={prompt.busy}
+          error={prompt.error}
+          onConfirm={(scope) => void confirmScope(scope)}
+          onCancel={() => setPrompt(null)}
+        />
+      )}
+      {prompt?.mode === 'edit' && pending && (
+        <RecurringScopeDialog
+          mode="edit"
+          original={pending.original}
+          changed={pending.changed}
+          calendars={props.calendars ?? []}
+          busy={prompt.busy}
+          error={prompt.error}
+          onConfirm={(scope) => void confirmScope(scope)}
+          onDiscard={() => {
+            setPending(null)
+            setPrompt(null)
+            prompt.then?.()
+          }}
+          onContinue={() => {
+            setPrompt(null)
+            reopenPending(prompt.anchor)
+          }}
         />
       )}
     </section>
