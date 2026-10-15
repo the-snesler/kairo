@@ -154,8 +154,13 @@ test('a task created from the calendar is added in Todoist and stored right away
   globalThis.fetch = (async (input, init) => {
     if (String(input).endsWith('/user')) return Response.json({ id: 'todoist-user', tz_info: { timezone: 'UTC' } })
     const commands = (init?.body as URLSearchParams).get('commands')
-    // The follow-up sync returns nothing new; the stored row stands on its own.
-    if (!commands) return Response.json({ sync_token: 'after-create', full_sync: false, items: [] })
+    // The follow-up sync comes back without the duration; the length picked on the calendar still stands.
+    if (!commands)
+      return Response.json({
+        sync_token: 'after-create',
+        full_sync: false,
+        items: [{ id: 'remote-new', content: 'Plan offsite', due: { date: '2026-10-15T14:00:00.000000Z' } }],
+      })
     const [command] = JSON.parse(commands)
     sent.push(command)
     return Response.json({
@@ -173,7 +178,7 @@ test('a task created from the calendar is added in Todoist and stored right away
     assert.equal(stored.todoistId, 'remote-new')
     assert.equal(stored.content, 'Plan offsite')
     assert.equal(stored.dueDateTime?.toISOString(), '2026-10-15T14:00:00.000Z')
-    assert.equal(stored.durationMinutes, 45)
+    assert.equal(stored.durationOverrideMinutes, 45)
     assert.equal(sent[0].type, 'item_add')
     assert.deepEqual(sent[0].args.duration, { amount: 45, unit: 'minute' })
   } finally {

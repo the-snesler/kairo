@@ -524,6 +524,8 @@ export async function createProviderTask(userId: string, input: TaskCreate) {
       dueDate: input.due && 'date' in input.due ? input.due.date : null,
       dueDateTime: input.due && 'dateTime' in input.due ? new Date(input.due.dateTime) : null,
       durationMinutes: timed ? (input.durationMinutes ?? null) : null,
+      // The length picked on the calendar is the user's choice, so later syncs can't shorten it.
+      durationOverrideMinutes: timed ? (input.durationMinutes ?? null) : null,
     })
     .onConflictDoNothing()
     .returning()

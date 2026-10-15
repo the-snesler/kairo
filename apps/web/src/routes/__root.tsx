@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { createRootRoute, HeadContent, Outlet, Scripts } from '@tanstack/react-router'
+import { Toaster } from 'sonner'
 import styles from '../styles.css?url'
 
 export const Route = createRootRoute({
@@ -30,6 +31,7 @@ function Document({ children }: { children: ReactNode }) {
       </head>
       <body>
         {children}
+        <Toaster position="bottom-right" theme="dark" />
         <Scripts />
       </body>
     </html>

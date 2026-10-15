@@ -1,6 +1,7 @@
 import { startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from 'react'
 import { createPortal, flushSync } from 'react-dom'
+import { toast } from 'sonner'
 import IconChevronLeft from '~icons/tabler/chevron-left'
 import IconChevronRight from '~icons/tabler/chevron-right'
 import IconChevronDown from '~icons/tabler/chevron-down'
@@ -240,6 +241,17 @@ function draftEvent(draft: EventDraft): CalendarEvent {
   })
 }
 
+/** Whether the snapshot now carries an optimistically created item: tasks by id, events by title and time. */
+function landed(item: CalendarEvent, sourceEvents: CalendarEvent[]) {
+  return sourceEvents.some((event) =>
+    item.taskId
+      ? event.taskId === item.taskId
+      : event.title === item.title &&
+        parseEventDate(event.start, event.allDay).getTime() === parseEventDate(item.start, item.allDay).getTime() &&
+        parseEventDate(event.end, event.allDay).getTime() === parseEventDate(item.end, item.allDay).getTime(),
+  )
+}
+
 function EventCard({
   event,
   compact,
@@ -379,7 +391,8 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
     // Optimistic task moves also cover tasks that were not on the calendar yet (dropped from the sidebar).
     const unscheduled = Object.values(taskOverrides).filter((event) => !scheduled.has(event.taskId))
     const draft: CalendarEvent[] = editor?.draft ? [draftEvent(editor.draft)] : []
-    return [...sourceEvents, ...created, ...unscheduled, ...draft]
+    const pendingCreates = created.filter((item) => !landed(item, sourceEvents))
+    return [...sourceEvents, ...pendingCreates, ...unscheduled, ...draft]
       .filter((event) => !deleted.includes(event.id))
       .map((event) => {
         const current =
@@ -437,20 +450,15 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
   }, [sourceEvents])
 
   useEffect(() => {
-    setCreated((current) =>
-      current.filter(
-        (draft) =>
-          !sourceEvents.some(
-            (event) =>
-              event.title === draft.title &&
-              parseEventDate(event.start, event.allDay).getTime() ===
-                parseEventDate(draft.start, draft.allDay).getTime() &&
-              parseEventDate(event.end, event.allDay).getTime() === parseEventDate(draft.end, draft.allDay).getTime(),
-          ),
-      ),
-    )
+    setCreated((current) => {
+      const next = current.filter((item) => !landed(item, sourceEvents))
+      return next.length === current.length ? current : next
+    })
+  }, [sourceEvents, created])
+
+  useEffect(() => {
     setDeleted((current) => current.filter((id) => props.events.some((event) => event.id === id)))
-  }, [props.events, sourceEvents])
+  }, [props.events])
 
   const setDate = useCallback(
     (next: Date) => {
@@ -644,29 +652,45 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
     setEditor({ eventId: null, draft, anchor })
   }
 
-  const createEvent = async (draft: EventDraft) => {
-    const optimistic = { ...draft, id: `pending-${crypto.randomUUID()}` }
+  // Creates appear at once: the optimistic card replaces the draft in the same render, the save runs in the
+  // background, and a toast reports how it went.
+  const createOptimistic = (
+    optimistic: CalendarEvent,
+    save: () => Promise<string | null | void> | void,
+    label: 'Event' | 'Task',
+  ) => {
     setCreated((current) => [...current, optimistic])
-    try {
-      await props.onEventCreate?.(draft)
-    } catch (cause) {
-      setCreated((current) => current.filter((item) => item.id !== optimistic.id))
-      throw cause
-    }
+    setEditor(null)
+    void (async () => {
+      try {
+        const id = await save()
+        // Tasks are matched by id once known; otherwise the snapshot loaded by `save` already has the item.
+        setCreated((current) =>
+          id
+            ? current.map((item) => (item.id === optimistic.id ? { ...item, taskId: id } : item))
+            : current.filter((item) => item.id !== optimistic.id),
+        )
+        toast.success(`${label} created`, { description: optimistic.title })
+      } catch (cause) {
+        setCreated((current) => current.filter((item) => item.id !== optimistic.id))
+        toast.error(`Could not create ${label.toLowerCase()}`, {
+          description: cause instanceof Error ? cause.message : String(cause),
+        })
+      }
+    })()
+  }
+
+  const createEvent = async (draft: EventDraft) => {
+    createOptimistic({ ...draft, id: `pending-${crypto.randomUUID()}` }, () => props.onEventCreate?.(draft), 'Event')
   }
 
   const createTask = async (draft: EventDraft) => {
     const input = draftTask(draft)
-    // Shown until the snapshot carries the real task (matched by title and time like created events).
-    const preview = draftEvent(draft)
-    const optimistic = { ...preview, id: `pending-${crypto.randomUUID()}`, task: { ...preview.task!, pending: true } }
-    setCreated((current) => [...current, optimistic])
-    try {
-      await props.onTaskCreate?.(input)
-    } catch (cause) {
-      setCreated((current) => current.filter((item) => item.id !== optimistic.id))
-      throw cause
-    }
+    createOptimistic(
+      { ...draftEvent(draft), id: `pending-${crypto.randomUUID()}` },
+      () => props.onTaskCreate?.(input),
+      'Task',
+    )
   }
 
   const deleteEvent = async (event: CalendarEvent) => {
