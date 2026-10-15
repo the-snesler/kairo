@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { addDays, startOfDay } from 'date-fns'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { toast } from 'sonner'
 import IconAlertCircle from '~icons/tabler/alert-circle'
 import IconChevronDown from '~icons/tabler/chevron-down'
 import IconCircleDashed from '~icons/tabler/circle-dashed'
@@ -138,8 +139,6 @@ function Dashboard({ user }: { user: { id: string; name: string; email: string }
   const [feedName, setFeedName] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [toast, setToast] = useState('')
-  const [undo, setUndo] = useState<{ id: number; label: string; action: () => void } | null>(null)
   const [openTask, setOpenTask] = useState<{ id: string; anchor: HTMLElement } | null>(null)
   const [conflictBusy, setConflictBusy] = useState<string | null>(null)
   const rangeRef = useRef({ start: addDays(startOfDay(new Date()), -20), end: addDays(startOfDay(new Date()), 42) })
@@ -170,7 +169,7 @@ function Dashboard({ user }: { user: { id: string; name: string; email: string }
     const authError = params.get('error')
     const connected = params.get('connected')
     if (authError) setError(authError)
-    else if (connected) setToast(`${connected === 'todoist' ? 'Todoist' : 'Google Calendar'} connected`)
+    else if (connected) toast.success(`${connected === 'todoist' ? 'Todoist' : 'Google Calendar'} connected`)
     if (authError || connected) window.history.replaceState(null, '', window.location.pathname)
   }, [snapshot])
 
@@ -196,7 +195,7 @@ function Dashboard({ user }: { user: { id: string; name: string; email: string }
       const result = await syncNow()
       if (result.errors.length) setError(result.errors.join(' · '))
       await load()
-      if (!result.errors.length) setToast('Up to date')
+      if (!result.errors.length) toast.success('Up to date')
     } catch (cause) {
       setError(String(cause))
     } finally {
@@ -254,11 +253,11 @@ function Dashboard({ user }: { user: { id: string; name: string; email: string }
     const previousDue = snapshot?.tasks.find((item) => item.id === id)?.due ?? null
     await mutation(() => updateTask({ data: { id, ...patch } }))
     if (patch.completed)
-      setUndo({
-        id: Date.now(),
-        label: 'Task completed',
-        action: () => {
-          void taskChange(id, { completed: false, due: previousDue }).catch(() => {})
+      toast.success('Task completed', {
+        duration: 6000,
+        action: {
+          label: 'Undo',
+          onClick: () => void taskChange(id, { completed: false, due: previousDue }).catch(() => {}),
         },
       })
   }
@@ -267,26 +266,28 @@ function Dashboard({ user }: { user: { id: string; name: string; email: string }
     const calendarId =
       event.calendarId || snapshot?.calendars.find((item) => item.isDefault)?.id || snapshot?.calendars[0]?.id
     if (!calendarId) throw new Error('Connect a writable Google calendar first')
-    await mutation(() =>
-      saveGoogleEvent({
-        data: {
-          title: event.title,
-          start: new Date(event.start).toISOString(),
-          end: new Date(event.end).toISOString(),
-          allDay: !!event.allDay,
-          calendarId,
-          eventColor: event.eventColor,
-          description: event.description,
-          location: event.location,
-          recurrence: event.recurrence?.length ? event.recurrence : null,
-          timeZone: browserTimeZone(),
-        },
-      }),
-    )
+    // Creates skip `mutation`: the calendar reports their failures in a toast rather than the status banner.
+    await saveGoogleEvent({
+      data: {
+        title: event.title,
+        start: new Date(event.start).toISOString(),
+        end: new Date(event.end).toISOString(),
+        allDay: !!event.allDay,
+        calendarId,
+        eventColor: event.eventColor,
+        description: event.description,
+        location: event.location,
+        recurrence: event.recurrence?.length ? event.recurrence : null,
+        timeZone: browserTimeZone(),
+      },
+    })
+    await load()
   }
 
   async function taskCreate(task: NewTask) {
-    await mutation(() => createTask({ data: task }))
+    const { id } = await createTask({ data: task })
+    await load()
+    return id
   }
 
   async function addFeed(event: React.FormEvent) {
@@ -309,7 +310,7 @@ function Dashboard({ user }: { user: { id: string; name: string; email: string }
     if (!window.confirm(`Remove ${name} from Kairo? Its decisions and existing Google copies will be kept.`)) return
     try {
       await mutation(() => deleteIcsFeed({ data: { id } }))
-      setToast('Feed removed')
+      toast.success('Feed removed')
     } catch {
       /* mutation displays the error. */
     }
@@ -333,7 +334,7 @@ function Dashboard({ user }: { user: { id: string; name: string; email: string }
     try {
       await resolveProjectionConflict({ data: { id, action } })
       await load()
-      setToast(
+      toast.success(
         action === 'restore'
           ? 'Google event restored from the feed'
           : action === 'keep-google'
@@ -384,24 +385,6 @@ function Dashboard({ user }: { user: { id: string; name: string; email: string }
             <span>{error || snapshot?.errors.join(' · ')}</span>
             <button aria-label="Dismiss" onClick={() => setError('')}>
               <IconX />
-            </button>
-          </div>
-        )}
-        {toast && (
-          <div className="toast" role="status" onAnimationEnd={() => setToast('')}>
-            {toast}
-          </div>
-        )}
-        {undo && (
-          <div className="toast toast-undo" role="status" key={undo.id} onAnimationEnd={() => setUndo(null)}>
-            {undo.label}
-            <button
-              onClick={() => {
-                undo.action()
-                setUndo(null)
-              }}
-            >
-              Undo
             </button>
           </div>
         )}
