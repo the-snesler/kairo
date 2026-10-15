@@ -182,6 +182,28 @@ export class GoogleCalendarClient {
       `/calendars/${encodeURIComponent(calendarId)}/events?${q}`,
     )
   }
+  /** Expanded occurrences of a recurring event, following pages until `maxResults` (total) is reached. */
+  async listInstances(
+    calendarId: string,
+    eventId: string,
+    options: { timeMin?: Date; timeMax?: Date; maxResults?: number; showDeleted?: boolean } = {},
+  ): Promise<GoogleEvent[]> {
+    const all: GoogleEvent[] = []
+    let pageToken: string | undefined
+    do {
+      const q = new URLSearchParams({ maxResults: String(Math.min(options.maxResults ?? 2500, 2500)) })
+      if (options.timeMin) q.set('timeMin', options.timeMin.toISOString())
+      if (options.timeMax) q.set('timeMax', options.timeMax.toISOString())
+      if (options.showDeleted) q.set('showDeleted', 'true')
+      if (pageToken) q.set('pageToken', pageToken)
+      const page = await this.request<{ items?: GoogleEvent[]; nextPageToken?: string }>(
+        `/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}/instances?${q}`,
+      )
+      all.push(...(page.items ?? []))
+      pageToken = page.nextPageToken
+    } while (pageToken && (!options.maxResults || all.length < options.maxResults))
+    return all
+  }
   getEvent(calendarId: string, eventId: string) {
     return this.request<GoogleEvent>(
       `/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`,

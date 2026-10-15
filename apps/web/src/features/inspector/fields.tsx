@@ -22,6 +22,7 @@ import { DAY_MINUTES, parseDate, parseDuration, parseTime } from './parse'
 import './inspector.css'
 
 const MENU_CLASS = 'insp-menu'
+const LAYER_CLASS = 'insp-layer'
 
 export type InspectorAnchor = Element | VirtualElement
 
@@ -59,7 +60,8 @@ export function useInspector(anchor: InspectorAnchor, onClose: () => void) {
   const { setPositionReference } = floating.refs
   useLayoutEffect(() => setPositionReference(reference), [reference, setPositionReference])
   const dismiss = useDismiss(floating.context, {
-    outsidePress: (event) => !(event.target instanceof Element && event.target.closest(`.${MENU_CLASS}`)),
+    outsidePress: (event) =>
+      !(event.target instanceof Element && event.target.closest(`.${MENU_CLASS}, .${LAYER_CLASS}`)),
   })
   const role = useRole(floating.context, { role: 'dialog' })
   const { getFloatingProps } = useInteractions([dismiss, role])
@@ -609,6 +611,49 @@ export function TextField({
     },
   }
   return multiline ? <textarea rows={1} {...common} /> : <input {...common} />
+}
+
+/** Centered dialog over a dimmed backdrop. Clicks inside it don't dismiss an open inspector; Escape closes only it. */
+export function Modal({
+  onDismiss,
+  onKeyDown,
+  className,
+  children,
+  ...rest
+}: {
+  onDismiss: () => void
+  onKeyDown?: (e: ReactKeyboardEvent<HTMLDivElement>) => void
+  className?: string
+  children: ReactNode
+  'aria-label': string
+}) {
+  const panel = useRef<HTMLDivElement>(null)
+  useEffect(() => panel.current?.focus(), [])
+  return (
+    <FloatingPortal>
+      <div className={LAYER_CLASS} onMouseDown={(e) => e.target === e.currentTarget && onDismiss()}>
+        <div
+          ref={panel}
+          role="dialog"
+          aria-modal="true"
+          aria-label={rest['aria-label']}
+          tabIndex={-1}
+          className={`insp-modal ${className ?? ''}`}
+          onKeyDown={(e) => {
+            // Fields that handled Escape themselves (closing a menu) stop the native event.
+            if (e.nativeEvent.cancelBubble) return
+            onKeyDown?.(e)
+            if (e.key === 'Escape' && !e.defaultPrevented) {
+              stopEscape(e)
+              onDismiss()
+            }
+          }}
+        >
+          {children}
+        </div>
+      </div>
+    </FloatingPortal>
+  )
 }
 
 export function Row({ icon, children, className }: { icon?: ReactNode; children: ReactNode; className?: string }) {

@@ -21,7 +21,29 @@ export interface CalendarEvent {
   location?: string
   editable?: boolean
   recurring?: boolean
+  // RRULE/EXDATE lines of the event's series (or of a single event being made recurring). Absent = does not repeat.
+  recurrence?: string[]
+  // Set on expanded occurrences of a Google series; identifies what a scoped edit applies to.
+  series?: SeriesRef
 }
+
+export type RecurringScope = 'this' | 'following' | 'all'
+
+export interface SeriesRef {
+  /** google_event row id of the series master. */
+  masterId: string
+  /** Google id of this occurrence (e.g. `abc123_20261016T182000Z`). */
+  instanceId: string
+  /** The occurrence's slot in the series: ISO datetime, or YYYY-MM-DD for all-day. */
+  originalStart: string
+  /** IANA zone the series recurs in, when Google reports one. */
+  timeZone?: string
+}
+
+/** Fields of a recurring occurrence the user changed; only these are written. `recurrence: null` stops repeating. */
+export type RecurringEventPatch = Partial<
+  Pick<CalendarEvent, 'title' | 'start' | 'end' | 'allDay' | 'calendarId' | 'eventColor' | 'description' | 'location'>
+> & { recurrence?: string[] | null }
 
 export interface CalendarOption {
   id: string

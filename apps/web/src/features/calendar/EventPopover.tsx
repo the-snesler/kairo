@@ -1,19 +1,31 @@
+import {
+  formatRecurrence,
+  matchPreset,
+  parseRecurrence,
+  presetsFor,
+  summarizeRecurrence,
+} from '@kairo/integrations/recurrence'
 import { differenceInCalendarDays } from 'date-fns'
 import { FloatingPortal } from '@floating-ui/react'
 import { useRef, useState } from 'react'
 import IconArrowRight from '~icons/tabler/arrow-right'
 import IconCalendar from '~icons/tabler/calendar-event'
+import IconChevronLeft from '~icons/tabler/chevron-left'
+import IconChevronRight from '~icons/tabler/chevron-right'
 import IconClock from '~icons/tabler/clock'
 import IconLock from '~icons/tabler/lock'
 import IconMapPin from '~icons/tabler/map-pin'
 import IconPalette from '~icons/tabler/palette'
 import IconRepeat from '~icons/tabler/repeat'
+import IconRepeatOff from '~icons/tabler/repeat-off'
 import IconTrash from '~icons/tabler/trash'
 import IconX from '~icons/tabler/x'
 import { Combo, DateField, EndTimeField, Row, TextField, TimeField, useInspector } from '../inspector/fields'
-import type { InspectorAnchor } from '../inspector/fields'
+import type { ComboOption, InspectorAnchor } from '../inspector/fields'
 import { formatDuration } from '../tasks/grouping'
 import { addDays, dayKey, minuteOfDay, parseEventDate, startOfDay } from './date'
+import { RecurrenceDialog } from './RecurrenceDialog'
+import { EVENT_COLORS } from './recurring'
 import type { CalendarEvent, CalendarOption, EventDecision } from './types'
 
 export type EventDraft = Omit<CalendarEvent, 'id'>
@@ -31,24 +43,12 @@ export interface EventPopoverProps {
   onDraftChange: (draft: EventDraft) => void
   onCreate?: (draft: EventDraft) => Promise<void>
   onDelete?: (event: CalendarEvent) => Promise<void>
+  /** Deleting an occurrence of a series asks for a scope instead of deleting right away. */
+  onDeleteOccurrence?: (event: CalendarEvent) => void
+  onNavigateOccurrence?: (event: CalendarEvent, direction: 'prev' | 'next') => void
   onDecide?: (event: CalendarEvent, decision: EventDecision, calendarId?: string) => Promise<void>
 }
 
-// Google's event color ids, using the hex its colors API reports (what synced events render with). The server
-// snaps whatever we send to the nearest id, so these round-trip exactly.
-const EVENT_COLORS: [string, string][] = [
-  ['Tomato', '#dc2127'],
-  ['Flamingo', '#ff887c'],
-  ['Tangerine', '#ffb878'],
-  ['Banana', '#fbd75b'],
-  ['Sage', '#7ae7bf'],
-  ['Basil', '#51b749'],
-  ['Peacock', '#46d6db'],
-  ['Blueberry', '#5484ed'],
-  ['Lavender', '#a4bdfc'],
-  ['Grape', '#dbadff'],
-  ['Graphite', '#e1e1e1'],
-]
 const DECISIONS: [EventDecision, string][] = [
   ['yes', 'Yes'],
   ['maybe', 'Maybe'],
@@ -67,6 +67,7 @@ export function EventPopover(props: EventPopoverProps) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [target, setTarget] = useState(value.calendarId ?? calendars[0]?.id ?? '')
+  const [customRepeat, setCustomRepeat] = useState(false)
   const inspector = useInspector(props.anchor, props.onClose)
 
   const start = parseEventDate(value.start, value.allDay)
@@ -136,6 +137,21 @@ export function EventPopover(props: EventPopoverProps) {
   const colorOptions = EVENT_COLORS.map(([name, hex]) => ({ key: hex, label: name, swatch: hex, value: hex }))
   const kind = draft ? 'New event' : external ? 'Maybe event' : 'Event'
 
+  const repeat = summarizeRecurrence(value.recurrence, start)
+  const repeatKey = matchPreset(value.recurrence, start) ?? 'current'
+  const extra = parseRecurrence(value.recurrence)?.extra ?? []
+  const repeatOptions: ComboOption<string[] | 'custom'>[] = [
+    ...presetsFor(start).map((preset) => ({
+      key: preset.key,
+      label: preset.label,
+      hint: preset.hint,
+      value: preset.rule ? formatRecurrence(preset.rule, extra) : [],
+    })),
+    ...(repeatKey === 'current' ? [{ key: 'current', ...repeat, value: value.recurrence ?? [] }] : []),
+    { key: 'custom', label: 'Custom…', value: 'custom' as const },
+  ]
+  const showRepeat = !external && (editable || !!value.recurrence?.length || !!value.recurring)
+
   return (
     <FloatingPortal>
       <div
@@ -156,14 +172,18 @@ export function EventPopover(props: EventPopoverProps) {
               </small>
             )}
           </span>
-          {event && !external && props.onDelete && (
+          {event && !external && (props.onDelete || (event.series && props.onDeleteOccurrence)) && (
             <button
               type="button"
               className="insp-icon-button is-danger"
               aria-label="Delete event"
               title="Delete event"
               disabled={locked}
-              onClick={() => void run(() => props.onDelete!(event), 'Could not delete event.')}
+              onClick={() =>
+                event.series && props.onDeleteOccurrence
+                  ? props.onDeleteOccurrence(event)
+                  : void run(() => props.onDelete!(event), 'Could not delete event.')
+              }
             >
               <IconTrash />
             </button>
@@ -256,13 +276,54 @@ export function EventPopover(props: EventPopoverProps) {
               >
                 All-day
               </button>
-              {value.recurring && (
-                <span className="insp-chip is-static">
-                  <IconRepeat /> Repeats
-                </span>
-              )}
             </div>
           </Row>
+          {showRepeat && (
+            <Row icon={value.recurrence?.length || value.recurring ? <IconRepeat /> : <IconRepeatOff />}>
+              <Combo
+                display={
+                  !value.recurrence?.length && value.recurring
+                    ? 'Repeats'
+                    : repeat.hint
+                      ? `${repeat.label} ${repeat.hint}`
+                      : repeat.label
+                }
+                aria-label="Repeat"
+                options={repeatOptions}
+                selectedKey={repeatKey}
+                disabled={locked}
+                onCommit={(choice) =>
+                  choice === 'custom'
+                    ? setCustomRepeat(true)
+                    : update({ recurrence: choice.length ? choice : undefined })
+                }
+              />
+              {event?.series && props.onNavigateOccurrence && (
+                <span className="insp-occurrence-nav">
+                  <button
+                    type="button"
+                    className="insp-icon-button"
+                    aria-label="Previous occurrence"
+                    title="Previous occurrence"
+                    disabled={busy}
+                    onClick={() => props.onNavigateOccurrence!(event, 'prev')}
+                  >
+                    <IconChevronLeft />
+                  </button>
+                  <button
+                    type="button"
+                    className="insp-icon-button"
+                    aria-label="Next occurrence"
+                    title="Next occurrence"
+                    disabled={busy}
+                    onClick={() => props.onNavigateOccurrence!(event, 'next')}
+                  >
+                    <IconChevronRight />
+                  </button>
+                </span>
+              )}
+            </Row>
+          )}
         </div>
 
         {(!locked || value.location) && (
@@ -321,11 +382,6 @@ export function EventPopover(props: EventPopoverProps) {
           </div>
         )}
 
-        {value.recurring && (
-          <p className="insp-note">
-            <IconLock /> Recurring events are read-only for now.
-          </p>
-        )}
         {error && (
           <p className="insp-error" role="alert">
             {error}
@@ -366,6 +422,18 @@ export function EventPopover(props: EventPopoverProps) {
           </div>
         )}
       </div>
+      {customRepeat && (
+        <RecurrenceDialog
+          start={start}
+          allDay={!!value.allDay}
+          lines={value.recurrence}
+          onCancel={() => setCustomRepeat(false)}
+          onDone={(recurrence) => {
+            setCustomRepeat(false)
+            update({ recurrence })
+          }}
+        />
+      )}
     </FloatingPortal>
   )
 }

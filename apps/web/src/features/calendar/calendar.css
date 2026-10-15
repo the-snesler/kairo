@@ -370,6 +370,16 @@
   overflow: hidden;
   overflow-wrap: anywhere;
 }
+.cal-event-dot {
+  background: currentColor;
+  border-radius: 50%;
+  display: inline-block;
+  height: 5px;
+  margin-right: 5px;
+  opacity: 0.85;
+  vertical-align: 2px;
+  width: 5px;
+}
 .cal-event-title svg {
   display: inline;
   height: 11px;

@@ -1,5 +1,6 @@
 .inspector,
-.insp-menu {
+.insp-menu,
+.insp-modal {
   --insp-surface: color-mix(in srgb, var(--color-elevated, #292c32), black 12%);
   --insp-hover: #ffffff0d;
   --insp-press: #ffffff17;
@@ -14,13 +15,17 @@
   font: 13px/1.4 var(--font-sans, Inter, ui-sans-serif, system-ui, sans-serif);
 }
 .inspector *,
-.insp-menu * {
+.insp-menu *,
+.insp-modal * {
   box-sizing: border-box;
 }
 .inspector button,
 .inspector input,
 .inspector textarea,
-.insp-menu button {
+.insp-menu button,
+.insp-modal button,
+.insp-modal input,
+.insp-modal select {
   font: inherit;
   color: inherit;
 }
@@ -539,6 +544,250 @@ textarea.insp-text {
 }
 .insp-month-grid button.is-today.is-active {
   box-shadow: inset 0 0 0 2px #fff6;
+}
+
+/* Occurrence navigation beside the repeat rule */
+.insp-occurrence-nav {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+}
+
+/* Modal dialogs (custom repeat, recurring scope) */
+.insp-layer {
+  align-items: center;
+  background: #090a0d99;
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: 20px;
+  position: fixed;
+  z-index: 105;
+}
+.insp-modal {
+  --rec-primary: #3b82f6;
+  background: var(--insp-surface);
+  border: 1px solid #ffffff14;
+  border-radius: 16px;
+  box-shadow:
+    0 24px 64px #000a,
+    0 2px 8px #0006;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: calc(100dvh - 40px);
+  max-width: 100%;
+  outline: none;
+  overflow: auto;
+  padding: 24px 24px 20px;
+  width: 400px;
+}
+.insp-modal.is-busy {
+  cursor: progress;
+}
+.rec-title {
+  font-size: 17px;
+  font-weight: 600;
+  margin: 0 0 4px;
+  overflow-wrap: anywhere;
+}
+.rec-line {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.rec-label {
+  color: var(--insp-muted);
+  min-width: 44px;
+}
+.insp-modal .rec-input {
+  background: #ffffff0d;
+  border: 1px solid #ffffff14;
+  border-radius: 8px;
+  color: var(--insp-text);
+  height: 34px;
+  min-width: 0;
+  outline: none;
+  padding: 0 10px;
+}
+.insp-modal .rec-input:focus,
+.insp-modal .rec-input[aria-expanded='true'] {
+  border-color: color-mix(in srgb, var(--rec-primary), transparent 30%);
+}
+.rec-number {
+  width: 72px;
+}
+.insp-modal select.rec-input option {
+  background: #26282d;
+}
+.rec-days {
+  display: flex;
+  gap: 6px;
+}
+.insp-modal .rec-day {
+  background: transparent;
+  border: 1px solid #ffffff1f;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 11px !important;
+  font-weight: 600;
+  height: 30px;
+  padding: 0;
+  width: 30px;
+}
+.insp-modal .rec-day:hover {
+  background: var(--insp-hover);
+}
+.insp-modal .rec-day.is-on {
+  background: color-mix(in srgb, var(--rec-primary), black 30%);
+  border-color: transparent;
+  color: #fff;
+}
+.rec-ends {
+  align-items: center;
+  display: grid;
+  gap: 8px 16px;
+  grid-template-columns: auto 1fr;
+}
+.rec-ends > .rec-label {
+  grid-column: 1 / -1;
+  padding: 4px 0 2px;
+}
+.rec-ends > .rec-radio:first-of-type {
+  grid-column: 1 / -1;
+}
+.rec-end-value {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  min-height: 34px;
+}
+.rec-end-value.is-inactive {
+  opacity: 0.45;
+}
+.rec-meta {
+  color: var(--insp-muted);
+}
+.rec-radio {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  gap: 10px;
+  min-height: 30px;
+}
+.rec-radio.is-disabled {
+  color: var(--insp-faint);
+  cursor: not-allowed;
+}
+.rec-radio input {
+  appearance: none;
+  border: 1.5px solid #ffffff2e;
+  border-radius: 50%;
+  cursor: inherit;
+  flex: none;
+  height: 18px;
+  margin: 0;
+  width: 18px;
+}
+.rec-radio input:checked {
+  background: radial-gradient(circle, #fff 0 3px, var(--rec-primary) 3.5px);
+  border-color: var(--rec-primary);
+}
+.rec-radio input:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--rec-primary), transparent 40%);
+  outline-offset: 2px;
+}
+.rec-actions {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding-top: 6px;
+}
+.rec-spacer {
+  flex: 1;
+}
+.insp-modal .rec-button {
+  background: #ffffff0f;
+  border: 1px solid #ffffff17;
+  border-radius: 9px;
+  cursor: pointer;
+  font-weight: 550;
+  padding: 7px 14px;
+}
+.insp-modal .rec-button:hover:not(:disabled) {
+  background: #ffffff1a;
+}
+.insp-modal .rec-button.is-primary {
+  background: var(--rec-primary);
+  border-color: transparent;
+  color: #fff;
+}
+.insp-modal .rec-button.is-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--rec-primary), white 15%);
+}
+.insp-modal .rec-button.is-danger {
+  color: #f2928d;
+}
+.insp-modal .rec-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.scope-dialog {
+  width: 460px;
+}
+.scope-options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.scope-changes {
+  border-top: 1px solid var(--insp-line);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 4px -24px 0;
+  padding: 14px 24px 0;
+}
+.scope-change {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 76px 1fr;
+}
+.scope-change dt {
+  color: var(--insp-muted);
+  text-align: right;
+}
+.scope-change dd {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  min-width: 0;
+}
+.scope-new,
+.scope-old {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scope-new::after {
+  background: currentColor;
+  border-radius: 50%;
+  content: '';
+  display: inline-block;
+  height: 6px;
+  margin-left: 8px;
+  vertical-align: middle;
+  width: 6px;
+}
+.scope-old {
+  color: var(--insp-muted);
+}
+.scope-error {
+  color: #f2928d;
+  font-size: 12px;
+  margin: 0;
 }
 
 @media (max-width: 700px) {
