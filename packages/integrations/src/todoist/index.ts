@@ -402,20 +402,47 @@ export function createTodoistProvider(options: TodoistProviderOptions = {}): Tas
           uuid: crypto.randomUUID(),
           args: { id: externalId },
         })
-      if (!commands.length) return
-      const result = (await todoistSyncRequest(
-        token,
-        new URLSearchParams({ commands: JSON.stringify(commands) }),
-        requestFetch,
-      )) as { sync_status?: Record<string, 'ok' | { error?: string; error_code?: number; http_code?: number }> }
-      for (const command of commands) {
-        const status = result.sync_status?.[command.uuid]
-        if (status === 'ok') continue
-        const message = `Todoist ${command.type} failed: ${status?.error || 'no status returned'}`
-        if (status?.http_code === 401 || status?.http_code === 403) throw new TodoistApiError(status.http_code, message)
-        if (status && (status.http_code ?? 400) < 500) throw new TaskPatchError(message)
-        throw new Error(message)
-      }
+      if (commands.length) await runCommands(token, commands)
     },
+    // New tasks land in the Inbox. Timed due dates are sent as floating times in the user's Todoist timezone.
+    async create(token, input, context = {}) {
+      const cursorTz = parseCursor(context.cursor ?? null)?.tz
+      const args: Record<string, unknown> = { content: input.title }
+      if (input.description) args.description = input.description
+      if (input.due) {
+        args.due = await todoistDueArg(
+          null,
+          input.due,
+          async () => cursorTz || (await getTodoistUser(token, requestFetch)).timeZone,
+        )
+        if ('dateTime' in input.due && input.durationMinutes)
+          args.duration = { amount: input.durationMinutes, unit: 'minute' }
+      }
+      const command = { type: 'item_add', uuid: crypto.randomUUID(), temp_id: crypto.randomUUID(), args }
+      const result = await runCommands(token, [command])
+      const id = result.temp_id_mapping?.[command.temp_id]
+      if (!id) throw new Error('Todoist did not return the new task id')
+      return String(id)
+    },
+  }
+
+  async function runCommands(token: string, commands: { type: string; uuid: string; args: Record<string, unknown> }[]) {
+    const result = (await todoistSyncRequest(
+      token,
+      new URLSearchParams({ commands: JSON.stringify(commands) }),
+      requestFetch,
+    )) as {
+      sync_status?: Record<string, 'ok' | { error?: string; error_code?: number; http_code?: number }>
+      temp_id_mapping?: Record<string, string>
+    }
+    for (const command of commands) {
+      const status = result.sync_status?.[command.uuid]
+      if (status === 'ok') continue
+      const message = `Todoist ${command.type} failed: ${status?.error || 'no status returned'}`
+      if (status?.http_code === 401 || status?.http_code === 403) throw new TodoistApiError(status.http_code, message)
+      if (status && (status.http_code ?? 400) < 500) throw new TaskPatchError(message)
+      throw new Error(message)
+    }
+    return result
   }
 }

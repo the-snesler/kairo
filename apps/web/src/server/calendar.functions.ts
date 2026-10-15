@@ -120,3 +120,18 @@ const taskInput = z.object({
 export const updateTask = createServerFn({ method: 'POST' })
   .validator(taskInput)
   .handler(async ({ data }) => (await import('./tasks.server')).updateTaskImpl(data))
+export const createTask = createServerFn({ method: 'POST' })
+  .validator(
+    z.object({
+      title: z.string().trim().min(1).max(500),
+      description: z.string().max(16_000).optional(),
+      due: taskDueInput,
+      durationMinutes: z
+        .number()
+        .int()
+        .min(5)
+        .max(24 * 60)
+        .optional(),
+    }),
+  )
+  .handler(async ({ data }) => (await import('./tasks.server')).createTaskImpl(data))

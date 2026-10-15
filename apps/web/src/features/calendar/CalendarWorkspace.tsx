@@ -23,8 +23,10 @@ import {
 import { inTopBar, normalizeTaskEvent, timedSegments } from './layout'
 import { onExternalDrag } from './dnd/external'
 import {
+  createRange,
   MIN_DURATION_MINUTES,
   moveEvent,
+  pointerMinutes,
   resizeEnd,
   resolveTarget,
   sameDue,
@@ -43,11 +45,13 @@ import type {
   CalendarView,
   CalendarWorkspaceProps as BaseWorkspaceProps,
   EventDecision,
+  NewTask,
   RecurringEventPatch,
   RecurringScope,
 } from './types'
 import type { InspectorAnchor } from '../inspector/fields'
 import { formatDuration } from '../tasks/grouping'
+import { DEFAULT_TASK_MINUTES } from '../tasks/types'
 import type { TaskSummary } from '../tasks/types'
 import './calendar.css'
 
@@ -85,10 +89,6 @@ const EXTERNAL_GHOST_HEIGHT = 22
 
 function safeColor(value: string | undefined, fallback = '#7894a8') {
   return value && colorPattern.test(value) ? value : fallback
-}
-
-function addMinutes(date: Date, minutes: number) {
-  return new Date(date.getTime() + minutes * 60_000)
 }
 
 function eventStyle(event: CalendarEvent, past: boolean): CSSProperties {
@@ -197,6 +197,48 @@ type DragData =
       bottomGap: number
       height: string
     }
+  | {
+      /** Dragging out a new event's time range in an empty part of a timed column. */
+      type: 'create'
+      day: Date
+      anchorMinutes: number
+      column: HTMLElement
+    }
+
+/** The task a task draft creates. All-day tasks fall on their first day; timed ones keep their length (up to a day). */
+function draftTask(draft: EventDraft): NewTask {
+  const description = draft.description?.trim()
+  const base = { title: draft.title.trim(), ...(description ? { description } : {}) }
+  if (draft.allDay) return { ...base, due: { date: draft.start.slice(0, 10) } }
+  return {
+    ...base,
+    due: { dateTime: new Date(draft.start).toISOString() },
+    durationMinutes: Math.min(Math.max(eventMinutes({ ...draft, id: DRAFT_ID }), 5), 24 * 60),
+  }
+}
+
+/** Calendar card for a draft; task drafts render like the task they will become. */
+function draftEvent(draft: EventDraft): CalendarEvent {
+  const title = draft.title.trim() || '(No title)'
+  if (draft.kind !== 'task') return { ...draft, id: DRAFT_ID, title, editable: false }
+  const { due, durationMinutes = DEFAULT_TASK_MINUTES } = draftTask(draft)
+  return normalizeTaskEvent({
+    ...draft,
+    id: DRAFT_ID,
+    title,
+    editable: false,
+    task: {
+      id: DRAFT_ID,
+      title,
+      priority: 1,
+      due,
+      recurring: false,
+      durationMinutes,
+      durationSource: 'user',
+      completed: false,
+    },
+  })
+}
 
 function EventCard({
   event,
@@ -336,9 +378,7 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
     const scheduled = new Set(sourceEvents.map((event) => event.taskId))
     // Optimistic task moves also cover tasks that were not on the calendar yet (dropped from the sidebar).
     const unscheduled = Object.values(taskOverrides).filter((event) => !scheduled.has(event.taskId))
-    const draft: CalendarEvent[] = editor?.draft
-      ? [{ ...editor.draft, id: DRAFT_ID, title: editor.draft.title || '(No title)', editable: false }]
-      : []
+    const draft: CalendarEvent[] = editor?.draft ? [draftEvent(editor.draft)] : []
     return [...sourceEvents, ...created, ...unscheduled, ...draft]
       .filter((event) => !deleted.includes(event.id))
       .map((event) => {
@@ -567,19 +607,21 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
     if (event || draft) setEditor({ eventId: event?.id ?? null, draft, anchor: element })
   }
 
-  const createAt = (element: HTMLElement, day: Date, minutes: number, allDay = false) => {
-    const start = addMinutes(day, allDay ? 0 : minutes)
-    const end = allDay ? addDays(day, 1) : addMinutes(start, 60)
+  const canCreate = !!props.onEventCreate || !!props.onTaskCreate
+
+  const createAt = (element: HTMLElement, day: Date, minutes: number, allDay = false, duration = 60) => {
+    const start = allDay ? day : wallClock(dayKey(day), minutes)
+    const end = allDay ? addDays(day, 1) : wallClock(dayKey(day), minutes + duration)
     const calendar = props.calendars?.[0]
     if (prompt) return
-    if (pendingRef.current) return afterPending(() => createAt(element, day, minutes, allDay), editor?.anchor)
+    if (pendingRef.current) return afterPending(() => createAt(element, day, minutes, allDay, duration), editor?.anchor)
     navToken.current++
     setAwaiting(null)
     const draft: EventDraft = {
       title: '',
       start: allDay ? dayKey(start) : start.toISOString(),
       end: allDay ? dayKey(end) : end.toISOString(),
-      kind: 'google',
+      kind: props.onEventCreate ? 'google' : 'task',
       allDay,
       calendarId: calendar?.id,
       calendarColor: calendar?.color,
@@ -591,7 +633,12 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
           contextElement: element,
           getBoundingClientRect: () => {
             const box = element.getBoundingClientRect()
-            return new DOMRect(box.left, box.top + (minutes / 60) * HOUR_HEIGHT, box.width, HOUR_HEIGHT)
+            return new DOMRect(
+              box.left,
+              box.top + (minutes / 60) * HOUR_HEIGHT,
+              box.width,
+              (Math.min(duration, 24 * 60 - minutes) / 60) * HOUR_HEIGHT,
+            )
           },
         }
     setEditor({ eventId: null, draft, anchor })
@@ -602,6 +649,20 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
     setCreated((current) => [...current, optimistic])
     try {
       await props.onEventCreate?.(draft)
+    } catch (cause) {
+      setCreated((current) => current.filter((item) => item.id !== optimistic.id))
+      throw cause
+    }
+  }
+
+  const createTask = async (draft: EventDraft) => {
+    const input = draftTask(draft)
+    // Shown until the snapshot carries the real task (matched by title and time like created events).
+    const preview = draftEvent(draft)
+    const optimistic = { ...preview, id: `pending-${crypto.randomUUID()}`, task: { ...preview.task!, pending: true } }
+    setCreated((current) => [...current, optimistic])
+    try {
+      await props.onTaskCreate?.(input)
     } catch (cause) {
       setCreated((current) => current.filter((item) => item.id !== optimistic.id))
       throw cause
@@ -834,8 +895,16 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
   }
 
   const drag = useCalendarDrag<DragData>({
-    cursor: (session) => (session.data.type === 'resize' ? 'resize' : 'move'),
+    cursor: (session) => (session.data.type === 'move' ? 'move' : 'resize'),
     resolve: ({ data, x, y }) => {
+      if (data.type === 'create') {
+        const top = data.column.getBoundingClientRect().top
+        return {
+          zone: 'timed',
+          day: dayKey(data.day),
+          ...createRange(data.anchorMinutes, pointerMinutes(y, top, HOUR_HEIGHT)),
+        }
+      }
       if (data.type === 'resize') {
         const rect = data.column.getBoundingClientRect()
         return {
@@ -864,6 +933,11 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
     },
     onDrop: ({ data }, target) => {
       if (!target || target.invalid) return
+      if (data.type === 'create') {
+        if (target.minutes !== undefined && target.endMinutes !== undefined)
+          createAt(data.column, data.day, target.minutes, false, target.endMinutes - target.minutes)
+        return
+      }
       const { item } = data
       if (data.type === 'resize') {
         // Measure from the item's true start: the resized segment may begin at midnight of a later day.
@@ -947,6 +1021,23 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
       },
       e.nativeEvent,
       { grabX: e.clientX - box.left, grabY: e.clientY - box.top, width: box.width, height: box.height },
+    )
+  }
+
+  const startCreate = (e: ReactPointerEvent<HTMLElement>, day: Date) => {
+    // Touch drags scroll the grid; cards handle their own presses.
+    if (e.button !== 0 || e.pointerType === 'touch' || !canCreate || prompt) return
+    if (e.target instanceof Element && e.target.closest('.cal-event')) return
+    const column = e.currentTarget
+    drag.begin(
+      {
+        type: 'create',
+        day,
+        anchorMinutes: pointerMinutes(e.clientY, column.getBoundingClientRect().top, HOUR_HEIGHT),
+        column,
+      },
+      e.nativeEvent,
+      { grabX: 0, grabY: 0, width: 0, height: 0 },
     )
   }
 
@@ -1219,6 +1310,7 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
                       data-drop-zone="timed"
                       data-day={dayKey(day)}
                       style={{ width: columnWidth }}
+                      onPointerDown={(e) => startCreate(e, day)}
                       onDoubleClick={(e) => {
                         const box = e.currentTarget.getBoundingClientRect()
                         const minutes = Math.max(
@@ -1357,6 +1449,7 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
           }}
           onDraftChange={(draft) => setEditor((current) => current && { ...current, draft })}
           onCreate={props.onEventCreate ? createEvent : undefined}
+          onCreateTask={props.onTaskCreate ? createTask : undefined}
           onDelete={props.onEventDelete ? deleteEvent : undefined}
           onDeleteOccurrence={props.onRecurringEventDelete ? deleteOccurrence : undefined}
           onNavigateOccurrence={props.onFindOccurrence ? navigateOccurrence : undefined}

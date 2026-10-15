@@ -4,7 +4,7 @@ import test from 'node:test'
 import { eq } from 'drizzle-orm'
 import { db, sqlite, calendar, connectedAccount, task, taskBlock, taskConnection, user } from '@kairo/db'
 import { decryptJson, encryptJson } from './credentials'
-import { connectionCanWrite, pushTask, saveTodoistConnection, syncTodoistConnection } from './sync'
+import { connectionCanWrite, createProviderTask, pushTask, saveTodoistConnection, syncTodoistConnection } from './sync'
 
 for (const file of readdirSync('../../packages/db/migrations')
   .filter((name) => name.endsWith('.sql'))
@@ -146,4 +146,43 @@ test('a pending task patch is pushed to Todoist and then cleared', async () => {
     ],
   )
   assert.equal(db.select().from(task).where(eq(task.id, 'task')).get()?.pendingPatch, null)
+})
+
+test('a task created from the calendar is added in Todoist and stored right away', async () => {
+  const originalFetch = globalThis.fetch
+  const sent: { type: string; args: Record<string, unknown> }[] = []
+  globalThis.fetch = (async (input, init) => {
+    if (String(input).endsWith('/user')) return Response.json({ id: 'todoist-user', tz_info: { timezone: 'UTC' } })
+    const commands = (init?.body as URLSearchParams).get('commands')
+    // The follow-up sync returns nothing new; the stored row stands on its own.
+    if (!commands) return Response.json({ sync_token: 'after-create', full_sync: false, items: [] })
+    const [command] = JSON.parse(commands)
+    sent.push(command)
+    return Response.json({
+      sync_status: { [command.uuid]: 'ok' },
+      temp_id_mapping: { [command.temp_id]: 'remote-new' },
+    })
+  }) as typeof fetch
+  try {
+    const id = await createProviderTask('owner', {
+      title: 'Plan offsite',
+      due: { dateTime: '2026-10-15T14:00:00.000Z' },
+      durationMinutes: 45,
+    })
+    const stored = db.select().from(task).where(eq(task.id, id!)).get()!
+    assert.equal(stored.todoistId, 'remote-new')
+    assert.equal(stored.content, 'Plan offsite')
+    assert.equal(stored.dueDateTime?.toISOString(), '2026-10-15T14:00:00.000Z')
+    assert.equal(stored.durationMinutes, 45)
+    assert.equal(sent[0].type, 'item_add')
+    assert.deepEqual(sent[0].args.duration, { amount: 45, unit: 'minute' })
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+
+  db.update(taskConnection).set({ scope: 'data:read' }).where(eq(taskConnection.id, 'todoist')).run()
+  await assert.rejects(
+    () => createProviderTask('owner', { title: 'Nope', due: { date: '2026-10-15' } }),
+    /Reconnect Todoist/,
+  )
 })

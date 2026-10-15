@@ -33,6 +33,7 @@ import {
   refreshGoogleToken,
   syncGoogleEvents,
   TODOIST_SCOPE,
+  type TaskCreate,
   type TaskProvider,
   type TodoistOAuthToken,
 } from '@kairo/integrations'
@@ -494,6 +495,41 @@ export async function pushTask(taskId: string) {
   // Recurring tasks change shape on the provider side (closing advances the due date), so read it back now.
   if (result.status === 'pushed' && item.dueRecurring)
     await syncTaskConnection(connection.id).catch((error) => console.error('Task resync failed', error))
+}
+
+// Creates the task with the provider, stores it right away, then syncs to fill in what the provider decided (project).
+export async function createProviderTask(userId: string, input: TaskCreate) {
+  const connections = await db.select().from(taskConnection).where(eq(taskConnection.ownerUserId, userId))
+  const connection = connections.find(
+    (item) =>
+      !!item.providerSubject &&
+      !!item.encryptedCredentials &&
+      !!taskProviders[item.provider]?.create &&
+      connectionCanWrite(item),
+  )
+  if (!connection)
+    throw new Error(connections.length ? 'Reconnect Todoist to create tasks' : 'Connect Todoist to create tasks')
+  const provider = taskProviderFor(connection)
+  const externalId = await withTaskToken(connection.id, provider, (token) =>
+    provider.create!(token, input, { cursor: connection.syncToken }),
+  )
+  const timed = !!input.due && 'dateTime' in input.due
+  const [created] = await db
+    .insert(task)
+    .values({
+      connectionId: connection.id,
+      todoistId: externalId,
+      content: input.title,
+      description: input.description || null,
+      dueDate: input.due && 'date' in input.due ? input.due.date : null,
+      dueDateTime: input.due && 'dateTime' in input.due ? new Date(input.due.dateTime) : null,
+      durationMinutes: timed ? (input.durationMinutes ?? null) : null,
+    })
+    .onConflictDoNothing()
+    .returning()
+  if (created) await syncTaskBlocks(db, { taskIds: [created.id] }, await taskMirrorCalendarId(userId), [created.id])
+  await syncTaskConnection(connection.id).catch((error) => console.error('Task sync failed', error))
+  return created?.id ?? null
 }
 
 export async function processJobs() {

@@ -3,6 +3,7 @@ process.env.TZ = 'America/New_York'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  createRange,
   daysBetween,
   edgeVelocity,
   moveEvent,
@@ -114,4 +115,16 @@ test('task due for each zone', () => {
   assert.deepEqual(taskDueForTarget(null, { zone: 'month', day: '2026-11-02' }), { date: '2026-11-02' })
   assert.ok(sameDue({ dateTime: '2026-10-12T14:30:00Z' }, timed))
   assert.ok(!sameDue({ date: '2026-10-12' }, timed))
+})
+
+test('drag-to-create covers the slots between the press and the pointer, in either direction', () => {
+  // Pressed at 9:05, dragged down to 10:20 → 9:00–10:30.
+  assert.deepEqual(createRange(545, 620), { minutes: 540, endMinutes: 630 })
+  // Dragged up from 9:05 to 7:50 → 7:45–9:15 (the pressed slot stays in).
+  assert.deepEqual(createRange(545, 470), { minutes: 465, endMinutes: 555 })
+  // Barely moved: one slot.
+  assert.deepEqual(createRange(545, 548), { minutes: 540, endMinutes: 555 })
+  // Clamped to the day.
+  assert.deepEqual(createRange(1430, 1600), { minutes: 1425, endMinutes: 1440 })
+  assert.deepEqual(createRange(20, -40), { minutes: 0, endMinutes: 30 })
 })

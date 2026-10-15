@@ -75,6 +75,15 @@ export interface CalendarWorkspaceProps {
   tasks?: TaskSummary[]
   onTaskChange?: (taskId: string, patch: TaskPatch & { durationMinutes?: number | null }) => void | Promise<void>
   onTaskOpen?: (taskId: string, anchor: HTMLElement) => void
+  onTaskCreate?: (task: NewTask) => void | Promise<void>
+}
+
+/** A task created from the calendar. `durationMinutes` is set for timed tasks. */
+export interface NewTask {
+  title: string
+  description?: string
+  due: TaskDue
+  durationMinutes?: number
 }
 import type { ReactNode } from 'react'
-import type { TaskPatch, TaskSummary } from '../tasks/types'
+import type { TaskDue, TaskPatch, TaskSummary } from '../tasks/types'

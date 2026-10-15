@@ -64,6 +64,19 @@ export function resizeEnd(
   return clamp(snap(pointerMinutes(clientY, zoneTop, hourHeight), step), startMinutes + minDuration, DAY_MINUTES)
 }
 
+/**
+ * Snapped range for a drag-to-create in a timed column: from the slot where the drag started to the slot under the
+ * pointer, in either direction, always covering at least one slot.
+ */
+export function createRange(anchorMinutes: number, pointerMinutes: number, step = SNAP_MINUTES) {
+  const anchor = clamp(Math.floor(anchorMinutes / step) * step, 0, DAY_MINUTES - step)
+  const pointer = clamp(pointerMinutes, 0, DAY_MINUTES)
+  return {
+    minutes: Math.min(anchor, Math.floor(pointer / step) * step),
+    endMinutes: Math.min(DAY_MINUTES, Math.max(anchor + step, Math.ceil(pointer / step) * step)),
+  }
+}
+
 export interface ResolveOptions {
   hourHeight: number
   grabMinutes: number

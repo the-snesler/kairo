@@ -2,9 +2,9 @@ import '@tanstack/react-start/server-only'
 import { and, eq } from 'drizzle-orm'
 import { db, syncJob, task, taskConnection } from '@kairo/db'
 import { enqueueJob, mergePendingPatch, syncTaskBlocks } from '@kairo/core'
-import type { TaskPatch } from '@kairo/integrations'
+import type { TaskCreate, TaskPatch } from '@kairo/integrations'
 import { requireUser } from './auth'
-import { connectionCanWrite, processJobs, taskMirrorCalendarId } from './sync'
+import { connectionCanWrite, createProviderTask, processJobs, taskMirrorCalendarId } from './sync'
 
 // Applies the patch locally (optimistic), records it as pending, and enqueues a provider push.
 // durationMinutes is Kairo-only (null clears the user override).
@@ -86,4 +86,11 @@ export async function updateTaskImpl(
   )
   void processJobs().catch((error) => console.error('Task sync failed', error))
   return { ok: true }
+}
+
+export async function createTaskImpl(data: TaskCreate): Promise<{ id: string | null }> {
+  const user = await requireUser()
+  const id = await createProviderTask(user.id, data)
+  void processJobs().catch((error) => console.error('Task sync failed', error))
+  return { id }
 }

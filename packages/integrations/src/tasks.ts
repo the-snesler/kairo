@@ -9,6 +9,14 @@ export type TaskPatch = {
   completed?: boolean
 }
 
+// A new task. Duration only applies to timed tasks.
+export type TaskCreate = {
+  title: string
+  description?: string | null
+  due: TaskDue | null
+  durationMinutes?: number | null
+}
+
 export type NormalizedTask = {
   externalId: string
   title: string
@@ -47,6 +55,8 @@ export interface TaskProvider {
   readonly capabilities: TaskProviderCapabilities
   sync(token: string, cursor: string | null): Promise<TaskSyncResult>
   update(token: string, externalId: string, patch: TaskPatch, context?: TaskUpdateContext): Promise<void>
+  // Creates a task and returns its provider id. `cursor` is the stored sync cursor, as in TaskUpdateContext.
+  create?(token: string, input: TaskCreate, context?: { cursor?: string | null }): Promise<string>
   refreshToken?(refreshToken: string): Promise<TaskTokens>
   classifyError?(error: unknown): TaskErrorKind
   // Whether a granted OAuth scope allows update(); providers without scopes may omit this.

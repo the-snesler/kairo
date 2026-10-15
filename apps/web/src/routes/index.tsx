@@ -7,12 +7,13 @@ import IconCircleDashed from '~icons/tabler/circle-dashed'
 import IconPlus from '~icons/tabler/plus'
 import IconX from '~icons/tabler/x'
 import { CalendarWorkspace, type CalendarEvent } from '../features/calendar/CalendarWorkspace'
-import type { RecurringEventPatch, RecurringScope } from '../features/calendar/types'
+import type { NewTask, RecurringEventPatch, RecurringScope } from '../features/calendar/types'
 import { Sidebar } from '../features/shell/Sidebar'
 import { ProjectionConflicts } from '../features/shell/ProjectionConflicts'
 import { TaskPopover, type TaskChange } from '../features/tasks/TaskPopover'
 import {
   addIcsFeed,
+  createTask,
   decideExternalEvent,
   deleteGoogleEvent,
   deleteIcsFeed,
@@ -284,6 +285,10 @@ function Dashboard({ user }: { user: { id: string; name: string; email: string }
     )
   }
 
+  async function taskCreate(task: NewTask) {
+    await mutation(() => createTask({ data: task }))
+  }
+
   async function addFeed(event: React.FormEvent) {
     event.preventDefault()
     setBusy(true)
@@ -453,6 +458,7 @@ function Dashboard({ user }: { user: { id: string; name: string; email: string }
               mutation(() => decideExternalEvent({ data: { eventId: event.id, state, calendarId } }))
             }
             onTaskChange={taskChange}
+            onTaskCreate={snapshot.connections.todoist ? taskCreate : undefined}
             onTaskOpen={(id, anchor) => setOpenTask({ id, anchor })}
           />
         )}

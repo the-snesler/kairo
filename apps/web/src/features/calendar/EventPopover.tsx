@@ -10,6 +10,7 @@ import { FloatingPortal } from '@floating-ui/react'
 import { useRef, useState } from 'react'
 import IconArrowRight from '~icons/tabler/arrow-right'
 import IconCalendar from '~icons/tabler/calendar-event'
+import IconChevronDown from '~icons/tabler/chevron-down'
 import IconChevronLeft from '~icons/tabler/chevron-left'
 import IconChevronRight from '~icons/tabler/chevron-right'
 import IconClock from '~icons/tabler/clock'
@@ -42,6 +43,8 @@ export interface EventPopoverProps {
   onChange: (event: CalendarEvent) => void
   onDraftChange: (draft: EventDraft) => void
   onCreate?: (draft: EventDraft) => Promise<void>
+  /** Creates a task from a draft whose kind is 'task'. */
+  onCreateTask?: (draft: EventDraft) => Promise<void>
   onDelete?: (event: CalendarEvent) => Promise<void>
   /** Deleting an occurrence of a series asks for a scope instead of deleting right away. */
   onDeleteOccurrence?: (event: CalendarEvent) => void
@@ -56,6 +59,12 @@ const DECISIONS: [EventDecision, string][] = [
   ['undecided', 'Undecided'],
 ]
 
+type DraftKind = 'google' | 'task'
+const DRAFT_KINDS: ComboOption<DraftKind>[] = [
+  { key: 'google', label: 'New event', value: 'google' },
+  { key: 'task', label: 'New task', value: 'task' },
+]
+
 const atMinute = (day: Date, minutes: number) => new Date(day.getFullYear(), day.getMonth(), day.getDate(), 0, minutes)
 const addMinutes = (date: Date, minutes: number) => new Date(date.getTime() + minutes * 60_000)
 
@@ -63,7 +72,9 @@ export function EventPopover(props: EventPopoverProps) {
   const { event, draft, calendars } = props
   const value = (event ?? draft)!
   const external = event?.kind === 'external'
-  const editable = draft ? !!props.onCreate : props.editable
+  // Task drafts become a task with a due date (and length, when timed) rather than a calendar event.
+  const isTask = draft?.kind === 'task'
+  const editable = draft ? !!(isTask ? props.onCreateTask : props.onCreate) : props.editable
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [target, setTarget] = useState(value.calendarId ?? calendars[0]?.id ?? '')
@@ -123,8 +134,18 @@ export function EventPopover(props: EventPopoverProps) {
     }
   }
   const create = () => {
-    if (draft && props.onCreate && draft.title.trim() && !busy)
-      void run(() => props.onCreate!({ ...draft, title: draft.title.trim() }), 'Could not create event.')
+    const action = isTask ? props.onCreateTask : props.onCreate
+    if (draft && action && draft.title.trim() && !busy)
+      void run(
+        () => action({ ...draft, title: draft.title.trim() }),
+        isTask ? 'Could not create task.' : 'Could not create event.',
+      )
+  }
+  const setDraftKind = (kind: DraftKind) => {
+    if (!draft || kind === draft.kind) return
+    setError('')
+    // Tasks don't repeat from here; a dropped rule isn't brought back when switching back to an event.
+    props.onDraftChange({ ...draft, kind, ...(kind === 'task' ? { recurrence: undefined } : {}) })
   }
 
   const locked = !editable || busy
@@ -135,7 +156,8 @@ export function EventPopover(props: EventPopoverProps) {
     preset?.[0] ?? (color?.toLowerCase() === calendar?.color.toLowerCase() ? 'Calendar color' : 'Custom color')
   const calendarOptions = calendars.map((item) => ({ key: item.id, label: item.name, swatch: item.color, value: item }))
   const colorOptions = EVENT_COLORS.map(([name, hex]) => ({ key: hex, label: name, swatch: hex, value: hex }))
-  const kind = draft ? 'New event' : external ? 'Maybe event' : 'Event'
+  const kind = draft ? (isTask ? 'New task' : 'New event') : external ? 'Maybe event' : 'Event'
+  const span = !isTask && days > 1
 
   const repeat = summarizeRecurrence(value.recurrence, start)
   const repeatKey = matchPreset(value.recurrence, start) ?? 'current'
@@ -150,7 +172,7 @@ export function EventPopover(props: EventPopoverProps) {
     ...(repeatKey === 'current' ? [{ key: 'current', ...repeat, value: value.recurrence ?? [] }] : []),
     { key: 'custom', label: 'Custom…', value: 'custom' as const },
   ]
-  const showRepeat = !external && (editable || !!value.recurrence?.length || !!value.recurring)
+  const showRepeat = !external && !isTask && (editable || !!value.recurrence?.length || !!value.recurring)
 
   return (
     <FloatingPortal>
@@ -165,7 +187,22 @@ export function EventPopover(props: EventPopoverProps) {
       >
         <div className="insp-head">
           <span className="insp-kind">
-            {kind}
+            {draft && props.onCreate && props.onCreateTask ? (
+              <span className="insp-kind-picker">
+                <Combo
+                  className="insp-kind-select"
+                  display={kind}
+                  aria-label="Create"
+                  options={DRAFT_KINDS}
+                  selectedKey={isTask ? 'task' : 'google'}
+                  disabled={busy}
+                  onCommit={setDraftKind}
+                />
+                <IconChevronDown aria-hidden="true" />
+              </span>
+            ) : (
+              kind
+            )}
             {event && !editable && !external && (
               <small>
                 <IconLock /> Read only
@@ -225,10 +262,19 @@ export function EventPopover(props: EventPopoverProps) {
         <div className="insp-section">
           {value.allDay ? (
             <Row icon={<IconCalendar />}>
-              <DateField value={start} aria-label="Start date" disabled={locked} onCommit={setStartDate} />
-              <IconArrowRight className="insp-arrow" />
-              <DateField value={lastDay} aria-label="End date" disabled={locked} onCommit={setEndDate} />
-              {days > 1 && <span className="insp-meta">{days} days</span>}
+              <DateField
+                value={start}
+                aria-label={isTask ? 'Date' : 'Start date'}
+                disabled={locked}
+                onCommit={setStartDate}
+              />
+              {!isTask && (
+                <>
+                  <IconArrowRight className="insp-arrow" />
+                  <DateField value={lastDay} aria-label="End date" disabled={locked} onCommit={setEndDate} />
+                  {days > 1 && <span className="insp-meta">{days} days</span>}
+                </>
+              )}
             </Row>
           ) : (
             <>
@@ -252,11 +298,11 @@ export function EventPopover(props: EventPopoverProps) {
               <Row>
                 <DateField
                   value={start}
-                  aria-label={days > 1 ? 'Start date' : 'Date'}
+                  aria-label={span ? 'Start date' : 'Date'}
                   disabled={locked}
                   onCommit={setStartDate}
                 />
-                {days > 1 && (
+                {span && (
                   <>
                     <IconArrowRight className="insp-arrow" />
                     <DateField value={lastDay} aria-label="End date" disabled={locked} onCommit={setEndDate} />
@@ -326,7 +372,7 @@ export function EventPopover(props: EventPopoverProps) {
           )}
         </div>
 
-        {(!locked || value.location) && (
+        {!isTask && (!locked || value.location) && (
           <div className="insp-section">
             <Row icon={<IconMapPin />}>
               <TextField
@@ -353,7 +399,7 @@ export function EventPopover(props: EventPopoverProps) {
           </div>
         )}
 
-        {calendars.length > 0 && (
+        {!isTask && calendars.length > 0 && (
           <div className="insp-section">
             <Row icon={<span className="insp-swatch" style={{ background: calendar?.color ?? value.calendarColor }} />}>
               <Combo
@@ -394,7 +440,7 @@ export function EventPopover(props: EventPopoverProps) {
             <button
               type="button"
               className="insp-primary"
-              disabled={busy || !draft.title.trim() || !props.onCreate}
+              disabled={busy || !draft.title.trim() || !editable}
               onClick={create}
             >
               Create

@@ -300,3 +300,35 @@ test('Google event colors match on hue, and greys go to Graphite', () => {
   assert.equal(closestEventColorId('#4073ff'), '9') // Todoist blue → Blueberry
   assert.equal(closestEventColorId('#299438'), '10') // Todoist green → Basil
 })
+
+test('Todoist provider create adds an Inbox task and returns its id', async () => {
+  const requests: URLSearchParams[] = []
+  const provider = createTodoistProvider({
+    fetch: async (_input, init) => {
+      const body = init?.body as URLSearchParams
+      requests.push(body)
+      const [command] = JSON.parse(body.get('commands')!) as { uuid: string; temp_id: string }[]
+      return Response.json({ sync_status: { [command.uuid]: 'ok' }, temp_id_mapping: { [command.temp_id]: 'new-1' } })
+    },
+  })
+  const cursor = JSON.stringify({ v: 3, token: 's', tz: 'America/Chicago' })
+  const id = await provider.create!(
+    'token',
+    { title: 'Write report', due: { dateTime: '2026-10-13T16:00:00.000Z' }, durationMinutes: 90 },
+    { cursor },
+  )
+  assert.equal(id, 'new-1')
+  const [command] = JSON.parse(requests[0].get('commands')!)
+  assert.equal(command.type, 'item_add')
+  assert.deepEqual(command.args, {
+    content: 'Write report',
+    due: { date: '2026-10-13T11:00:00' },
+    duration: { amount: 90, unit: 'minute' },
+  })
+
+  await provider.create!('token', { title: 'Errand', due: { date: '2026-10-14' }, durationMinutes: 60 }, { cursor })
+  assert.deepEqual(JSON.parse(requests[1].get('commands')!)[0].args, {
+    content: 'Errand',
+    due: { date: '2026-10-14' },
+  })
+})
