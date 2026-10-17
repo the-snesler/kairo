@@ -75,7 +75,8 @@ export interface CalendarWorkspaceProps {
   tasks?: TaskSummary[]
   onTaskChange?: (taskId: string, patch: TaskPatch & { durationMinutes?: number | null }) => void | Promise<void>
   onTaskOpen?: (taskId: string, anchor: HTMLElement) => void
-  onTaskCreate?: (task: NewTask) => void | Promise<void>
+  /** Resolves with the new task's id (when known) once the calendar's events include it. */
+  onTaskCreate?: (task: NewTask) => void | Promise<string | null | void>
 }
 
 /** A task created from the calendar. `durationMinutes` is set for timed tasks. */
