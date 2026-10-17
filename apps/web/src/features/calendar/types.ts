@@ -46,6 +46,8 @@ export type RecurringEventPatch = Partial<
 > & { recurrence?: string[] | null }
 
 export interface CalendarOption {
+  isDefault?: boolean
+  isMaybe?: boolean
   id: string
   name: string
   color: string
@@ -71,7 +73,7 @@ export interface CalendarWorkspaceProps {
   onEventChange?: (event: CalendarEvent) => void | Promise<void>
   onEventCreate?: (event: Omit<CalendarEvent, 'id'>) => void | Promise<void>
   onEventDelete?: (event: CalendarEvent) => void | Promise<void>
-  onDecisionChange?: (event: CalendarEvent, decision: EventDecision, calendarId?: string) => void | Promise<void>
+  onDecisionChange?: (event: CalendarEvent, decision: EventDecision) => void | Promise<void>
   tasks?: TaskSummary[]
   onTaskChange?: (taskId: string, patch: TaskPatch & { durationMinutes?: number | null }) => void | Promise<void>
   onTaskOpen?: (taskId: string, anchor: HTMLElement) => void

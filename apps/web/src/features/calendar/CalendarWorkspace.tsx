@@ -703,13 +703,16 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
     }
   }
 
-  const decide = async (event: CalendarEvent, decision: EventDecision, calendarId?: string) => {
+  const decide = async (event: CalendarEvent, decision: EventDecision) => {
+    const calendar = props.calendars?.find((item) =>
+      decision === 'yes' ? item.isDefault : decision === 'maybe' ? item.isMaybe : false,
+    )
     setOverrides((current) => ({
       ...current,
-      [event.id]: { ...event, decision, calendarId: calendarId || event.calendarId },
+      [event.id]: { ...event, decision, calendarId: calendar?.id, eventColor: calendar?.color },
     }))
     try {
-      await props.onDecisionChange?.(event, decision, calendarId)
+      await props.onDecisionChange?.(event, decision)
     } catch (cause) {
       setOverrides((current) => {
         const next = { ...current }

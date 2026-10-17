@@ -49,7 +49,7 @@ export interface EventPopoverProps {
   /** Deleting an occurrence of a series asks for a scope instead of deleting right away. */
   onDeleteOccurrence?: (event: CalendarEvent) => void
   onNavigateOccurrence?: (event: CalendarEvent, direction: 'prev' | 'next') => void
-  onDecide?: (event: CalendarEvent, decision: EventDecision, calendarId?: string) => Promise<void>
+  onDecide?: (event: CalendarEvent, decision: EventDecision) => Promise<void>
 }
 
 const DECISIONS: [EventDecision, string][] = [
@@ -77,7 +77,6 @@ export function EventPopover(props: EventPopoverProps) {
   const editable = draft ? !!(isTask ? props.onCreateTask : props.onCreate) : props.editable
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [target, setTarget] = useState(value.calendarId ?? calendars[0]?.id ?? '')
   const [customRepeat, setCustomRepeat] = useState(false)
   const inspector = useInspector(props.anchor, props.onClose)
 
@@ -149,7 +148,7 @@ export function EventPopover(props: EventPopoverProps) {
   }
 
   const locked = !editable || busy
-  const calendar = calendars.find((item) => item.id === (external ? target : value.calendarId))
+  const calendar = calendars.find((item) => item.id === value.calendarId)
   const color = value.eventColor ?? calendar?.color
   const preset = EVENT_COLORS.find(([, hex]) => hex === color?.toLowerCase())
   const colorName =
@@ -399,32 +398,28 @@ export function EventPopover(props: EventPopoverProps) {
           </div>
         )}
 
-        {!isTask && calendars.length > 0 && (
+        {!external && !isTask && calendars.length > 0 && (
           <div className="insp-section">
             <Row icon={<span className="insp-swatch" style={{ background: calendar?.color ?? value.calendarColor }} />}>
               <Combo
                 display={calendar?.name ?? 'Calendar'}
-                aria-label={external ? 'Copy to calendar' : 'Calendar'}
+                aria-label="Calendar"
                 options={calendarOptions}
                 selectedKey={calendar?.id}
-                disabled={external ? busy || !props.onDecide : locked}
-                onCommit={(item) =>
-                  external ? setTarget(item.id) : update({ calendarId: item.id, calendarColor: item.color })
-                }
+                disabled={locked}
+                onCommit={(item) => update({ calendarId: item.id, calendarColor: item.color })}
               />
             </Row>
-            {!external && (
-              <Row icon={<IconPalette style={{ color }} />}>
-                <Combo
-                  display={colorName}
-                  aria-label="Event color"
-                  options={colorOptions}
-                  selectedKey={preset?.[1]}
-                  disabled={locked}
-                  onCommit={(eventColor) => update({ eventColor })}
-                />
-              </Row>
-            )}
+            <Row icon={<IconPalette style={{ color }} />}>
+              <Combo
+                display={colorName}
+                aria-label="Event color"
+                options={colorOptions}
+                selectedKey={preset?.[1]}
+                disabled={locked}
+                onCommit={(eventColor) => update({ eventColor })}
+              />
+            </Row>
           </div>
         )}
 
@@ -457,9 +452,7 @@ export function EventPopover(props: EventPopoverProps) {
                   className={event.decision === decision ? 'is-selected' : ''}
                   aria-pressed={event.decision === decision}
                   disabled={busy || !props.onDecide}
-                  onClick={() =>
-                    void run(() => props.onDecide!(event, decision, target || undefined), 'Could not save decision.')
-                  }
+                  onClick={() => void run(() => props.onDecide!(event, decision), 'Could not save decision.')}
                 >
                   {label}
                 </button>
