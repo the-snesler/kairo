@@ -460,7 +460,7 @@ export function planTaskBlock(
 }
 
 // Brings task blocks in line with their tasks and enqueues Google reconciles. `touched` forces a refresh (e.g. title change).
-export async function syncTaskBlocks(
+export function syncTaskBlocks(
   db: Db,
   scope: { connectionId: string } | { taskIds: string[] },
   calendarId: string | null,
@@ -526,8 +526,8 @@ export async function syncTaskBlocks(
             .get().id,
         )
     }
+    for (const id of jobs) enqueueJob(tx, 'task-block', id)
   })
-  for (const id of jobs) await enqueueJob(db, 'task-block', id)
   return jobs
 }
 

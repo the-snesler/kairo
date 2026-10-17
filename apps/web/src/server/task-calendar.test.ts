@@ -15,7 +15,9 @@ import {
   user,
   userCalendarSetting,
 } from '@kairo/db'
-import { syncTaskBlocks } from '@kairo/core'
+import { enqueueJob, reconcileTaskBlock, runDueJobs, syncTaskBlocks } from '@kairo/core'
+import { GoogleApiError, type GoogleCalendarClient } from '@kairo/integrations'
+import { setCalendarRoleForUser } from './calendar-settings'
 import { taskMirrorCalendarId } from './sync'
 
 for (const file of readdirSync('../../packages/db/migrations')
@@ -89,4 +91,86 @@ test('task calendar defaults to Default, supports an independent override, and m
   assert.equal(await taskMirrorCalendarId('owner'), 'default')
   db.update(userCalendarSetting).set({ isDefault: false }).run()
   assert.equal(await taskMirrorCalendarId('owner'), 'default') // first writable calendar
+})
+
+test('role changes atomically relocate existing task mirrors, including Default fallback', async () => {
+  const liveBlock = () =>
+    db
+      .select()
+      .from(taskBlock)
+      .all()
+      .find((block) => block.taskId === 'task' && block.syncState !== 'deleting')!
+  setCalendarRoleForUser('owner', { calendarId: 'default', role: 'default', active: true })
+  const original = liveBlock()
+  const failQueue = () =>
+    sqlite.exec(
+      `CREATE TEMP TRIGGER fail_task_queue BEFORE INSERT ON sync_job WHEN NEW.kind = 'task-block' BEGIN SELECT RAISE(ABORT, 'queue unavailable'); END`,
+    )
+  failQueue()
+  try {
+    assert.throws(
+      () => setCalendarRoleForUser('owner', { calendarId: 'tasks', role: 'tasks', active: true }),
+      /queue unavailable/,
+    )
+    assert.equal(taskMirrorCalendarId('owner'), 'default')
+    assert.equal(liveBlock().id, original.id)
+    assert.equal(db.select().from(taskBlock).where(eq(taskBlock.id, original.id)).get()?.syncState, original.syncState)
+  } finally {
+    sqlite.exec('DROP TRIGGER fail_task_queue')
+  }
+  setCalendarRoleForUser('owner', { calendarId: 'tasks', role: 'tasks', active: true })
+  const relocated = liveBlock()
+  assert.equal(relocated.calendarId, 'tasks')
+  assert.equal(relocated.startAt.getTime(), original.startAt.getTime())
+  assert.equal(relocated.endAt.getTime(), original.endAt.getTime())
+  assert.equal(db.select().from(taskBlock).where(eq(taskBlock.id, original.id)).get()?.syncState, 'deleting')
+  assert.ok(
+    db
+      .select()
+      .from(syncJob)
+      .where(eq(syncJob.jobKey, `task-block:${original.id}`))
+      .get(),
+  )
+  assert.ok(
+    db
+      .select()
+      .from(syncJob)
+      .where(eq(syncJob.jobKey, `task-block:${relocated.id}`))
+      .get(),
+  )
+  setCalendarRoleForUser('owner', { calendarId: 'default', role: 'default', active: true })
+  assert.equal(liveBlock().id, relocated.id) // explicit Tasks wins over Default
+  setCalendarRoleForUser('owner', { calendarId: 'tasks', role: 'tasks', active: false })
+  assert.equal(liveBlock().calendarId, 'default')
+  setCalendarRoleForUser('owner', { calendarId: 'tasks', role: 'default', active: true })
+  assert.equal(liveBlock().calendarId, 'tasks') // no override: follow Default
+  const stable = liveBlock().id
+  setCalendarRoleForUser('owner', { calendarId: 'tasks', role: 'default', active: true })
+  assert.equal(liveBlock().id, stable)
+
+  // Reconcile all queued replacements, retrying a failed delete without duplicate inserts.
+  let failDelete = true
+  const remote = new Map<string, string>([['existing-mirror', 'primary']])
+  const client = {
+    findByPrivateProperty: async () => undefined,
+    createEvent: async (calendarId: string) => {
+      const id = `created-${remote.size}`
+      remote.set(id, calendarId)
+      return { id, etag: 'created' }
+    },
+    deleteEvent: async (_calendarId: string, id: string) => {
+      if (failDelete) {
+        failDelete = false
+        throw new GoogleApiError(503, 'temporary failure')
+      }
+      remote.delete(id)
+    },
+  } as unknown as GoogleCalendarClient
+  const handlers = { 'task-block': (id: string) => reconcileTaskBlock(db, id, async () => client) }
+  await runDueJobs(db, handlers, 100)
+  for (const job of db.select().from(syncJob).all()) enqueueJob(db, job.kind, job.targetId)
+  await runDueJobs(db, handlers, 100)
+  assert.equal(db.select().from(syncJob).all().length, 0)
+  assert.deepEqual([...remote.values()], ['tasks'])
+  assert.equal(db.select().from(taskBlock).all().length, 1)
 })

@@ -14,18 +14,12 @@ import {
   taskEstimate,
   userCalendarSetting,
 } from '@kairo/db'
-import {
-  effectiveTaskDuration,
-  enqueueJob,
-  normalizeGoogleEvent,
-  reconcileProjection,
-  retargetProjections,
-  syncTaskBlocks,
-} from '@kairo/core'
+import { effectiveTaskDuration, enqueueJob, normalizeGoogleEvent, reconcileProjection } from '@kairo/core'
 import { closestEventColorId, GOOGLE_EVENT_COLORS, GoogleApiError, type GoogleEvent } from '@kairo/integrations'
 import type { CalendarEvent, RecurringEventPatch, RecurringScope } from '../features/calendar/types'
 import type { TaskSummary } from '../features/tasks/types'
 import { geminiConnected } from './ai-connection'
+import { setCalendarRoleForUser } from './calendar-settings'
 import { getAuthStatus, getSession, requireUser } from './auth'
 import {
   clientForCalendar,
@@ -487,29 +481,7 @@ export async function setCalendarRoleImpl(data: {
   const cal = await ownedCalendar(user.id, data.calendarId)
   if (data.active && cal.accessRole !== 'owner' && cal.accessRole !== 'writer')
     throw new Error('Choose a writable calendar')
-  const field = { default: 'isDefault', maybe: 'isMaybe', tasks: 'isTasks' } as const
-  const key = field[data.role]
-  db.transaction((tx) => {
-    if (data.active)
-      tx.update(userCalendarSetting)
-        .set({ [key]: false })
-        .where(eq(userCalendarSetting.userId, user.id))
-        .run()
-    tx.insert(userCalendarSetting)
-      .values({ userId: user.id, calendarId: data.calendarId, [key]: data.active })
-      .onConflictDoUpdate({
-        target: [userCalendarSetting.userId, userCalendarSetting.calendarId],
-        set: { [key]: data.active },
-      })
-      .run()
-    if (data.active && data.role !== 'tasks')
-      retargetProjections(tx, user.id, data.role === 'default' ? 'yes' : 'maybe', data.calendarId)
-  })
-  if (data.role === 'tasks' || data.role === 'default') {
-    const calendarId = await taskMirrorCalendarId(user.id)
-    const connections = await db.select().from(taskConnection).where(eq(taskConnection.ownerUserId, user.id))
-    for (const connection of connections) await syncTaskBlocks(db, { connectionId: connection.id }, calendarId)
-  }
+  setCalendarRoleForUser(user.id, data)
   void processJobs().catch((error) => console.error('Calendar destination sync failed', error))
   return { ok: true }
 }

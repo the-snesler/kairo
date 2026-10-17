@@ -376,8 +376,8 @@ async function withTaskToken<T>(connectionId: string, provider: TaskProvider, ru
 }
 
 // A Tasks calendar overrides Default; retain the first writable fallback when neither is set.
-export async function taskMirrorCalendarId(userId: string) {
-  const rows = await db
+export function taskMirrorCalendarId(userId: string, database: Pick<typeof db, 'select'> = db) {
+  const rows = database
     .select({ cal: calendar, setting: userCalendarSetting })
     .from(calendar)
     .innerJoin(accountAccess, eq(calendar.connectedAccountId, accountAccess.connectedAccountId))
@@ -386,6 +386,7 @@ export async function taskMirrorCalendarId(userId: string) {
       and(eq(userCalendarSetting.calendarId, calendar.id), eq(userCalendarSetting.userId, userId)),
     )
     .where(eq(accountAccess.userId, userId))
+    .all()
   const writable = rows.filter((row) => row.cal.accessRole === 'owner' || row.cal.accessRole === 'writer')
   return (
     (writable.find((row) => row.setting?.isTasks) ?? writable.find((row) => row.setting?.isDefault) ?? writable[0])?.cal
