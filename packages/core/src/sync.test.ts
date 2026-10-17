@@ -32,10 +32,11 @@ import {
   planTaskBlock,
   pushPendingPatch,
   reconcileProjection,
+  retargetProjections,
   reconcileTaskBlock,
   syncTaskBlocks,
 } from './sync.js'
-import type { GoogleCalendarClient, NormalizedTask } from '@kairo/integrations'
+import { GoogleApiError, type GoogleCalendarClient, type NormalizedTask } from '@kairo/integrations'
 
 for (const file of readdirSync('../db/migrations')
   .filter((name) => name.endsWith('.sql'))
@@ -744,4 +745,135 @@ test('all-day Maybe withdrawals use the start date and preserve the first withdr
     db.select().from(externalEvent).where(eq(externalEvent.id, 'all-day-tomorrow')).get()!.withdrawnAt,
     withdrawn,
   )
+})
+
+test('retargeting ICS decisions queues only the selected state and rolls back atomically', () => {
+  for (const state of ['yes', 'maybe', 'no', 'undecided'] as const) {
+    db.insert(externalEvent)
+      .values({
+        id: `retarget-${state}`,
+        sourceId: 'source',
+        uid: `retarget-${state}`,
+        recurrenceId: '',
+        title: state,
+        allDay: true,
+        startDate: '2020-01-01',
+        endDate: '2020-01-02',
+        sourceRevision: 'r1',
+      })
+      .run()
+    db.insert(eventDecision)
+      .values({
+        id: `retarget-${state}`,
+        userId: 'owner',
+        externalEventId: `retarget-${state}`,
+        state,
+        destinationCalendarId: 'cal',
+      })
+      .run()
+  }
+  db.insert(eventProjection)
+    .values({
+      decisionId: 'retarget-yes',
+      destinationCalendarId: 'cal',
+      googleEventId: 'original',
+      syncState: 'conflict',
+      conflictKind: 'remote_changed',
+    })
+    .run()
+  assert.throws(() =>
+    db.transaction((tx) => {
+      retargetProjections(tx, 'owner', 'yes', 'maybe-cal')
+      throw new Error('rollback')
+    }),
+  )
+  assert.equal(
+    db.select().from(eventDecision).where(eq(eventDecision.id, 'retarget-yes')).get()?.destinationCalendarId,
+    'cal',
+  )
+  assert.equal(db.select().from(syncJob).where(eq(syncJob.jobKey, 'projection:retarget-yes')).get(), undefined)
+  retargetProjections(db, 'owner', 'yes', 'maybe-cal')
+  assert.ok(db.select().from(syncJob).where(eq(syncJob.jobKey, 'projection:retarget-yes')).get())
+  for (const state of ['maybe', 'no', 'undecided'])
+    assert.equal(
+      db
+        .select()
+        .from(eventDecision)
+        .where(eq(eventDecision.id, `retarget-${state}`))
+        .get()?.destinationCalendarId,
+      'cal',
+    )
+  const projection = db.select().from(eventProjection).where(eq(eventProjection.decisionId, 'retarget-yes')).get()!
+  assert.equal(projection.destinationCalendarId, 'cal')
+  assert.equal(projection.googleEventId, 'original')
+  assert.equal(projection.conflictKind, 'remote_changed')
+  assert.deepEqual(retargetProjections(db, 'owner', 'yes', 'maybe-cal'), [])
+  retargetProjections(db, 'owner', 'maybe', 'maybe-cal')
+  assert.equal(
+    db.select().from(eventDecision).where(eq(eventDecision.id, 'retarget-maybe')).get()?.destinationCalendarId,
+    'maybe-cal',
+  )
+  assert.deepEqual(retargetProjections(db, 'someone-else', 'yes', 'cal'), [])
+})
+
+test('projection retry recovers a remote move before its local mapping was saved', async () => {
+  db.insert(externalEvent)
+    .values({
+      id: 'recover-move',
+      sourceId: 'source',
+      uid: 'recover-move',
+      recurrenceId: '',
+      title: 'Invitation',
+      allDay: true,
+      startDate: '2099-01-01',
+      endDate: '2099-01-02',
+      sourceRevision: 'r1',
+    })
+    .run()
+  db.insert(eventDecision)
+    .values({
+      id: 'recover-move',
+      userId: 'owner',
+      externalEventId: 'recover-move',
+      state: 'maybe',
+      destinationCalendarId: 'maybe-cal',
+    })
+    .run()
+  db.insert(eventProjection)
+    .values({
+      id: 'recover-move',
+      decisionId: 'recover-move',
+      destinationCalendarId: 'cal',
+      googleEventId: 'old',
+      lastAppliedEtag: 'old-etag',
+      syncState: 'conflict',
+      conflictKind: 'remote_deleted',
+    })
+    .run()
+  let updates = 0
+  const client = {
+    getEvent: async (calendarId: string) => {
+      assert.equal(calendarId, 'primary')
+      throw new GoogleApiError(410, 'gone')
+    },
+    findProjection: async (calendarId: string, projectionId: string) => {
+      assert.equal(calendarId, 'maybe')
+      assert.equal(projectionId, 'recover-move')
+      return { id: 'moved', etag: 'moved-etag' }
+    },
+    updateEvent: async (calendarId: string, id: string) => {
+      assert.equal(calendarId, 'maybe')
+      assert.equal(id, 'moved')
+      updates++
+      return { id, etag: 'updated' }
+    },
+    createEvent: async () => assert.fail('must not duplicate the moved copy'),
+    moveEvent: async () => assert.fail('must not move twice'),
+  } as unknown as GoogleCalendarClient
+  await reconcileProjection(db, 'recover-move', async () => client)
+  assert.equal(updates, 1)
+  const projection = db.select().from(eventProjection).where(eq(eventProjection.id, 'recover-move')).get()!
+  assert.equal(projection.destinationCalendarId, 'maybe-cal')
+  assert.equal(projection.googleEventId, 'moved')
+  assert.equal(projection.syncState, 'ready')
 })

@@ -617,11 +617,10 @@ export async function applyTaskBlockMoves(
 }
 
 // A running job keeps its lease (no parallel run); the bumped updatedAt tells finishJob to run it again.
-export async function enqueueJob(db: Db, kind: string, targetId: string, nextRunAt = new Date()) {
+export function enqueueJob(db: Db, kind: string, targetId: string, nextRunAt = new Date()) {
   const jobKey = `${kind}:${targetId}`,
     now = new Date()
-  await db
-    .insert(syncJob)
+  db.insert(syncJob)
     .values({ jobKey, kind, targetId, nextRunAt })
     .onConflictDoUpdate({
       target: syncJob.jobKey,
@@ -631,6 +630,7 @@ export async function enqueueJob(db: Db, kind: string, targetId: string, nextRun
         leaseUntil: sql`CASE WHEN ${syncJob.leaseUntil} > ${now.getTime()} THEN ${syncJob.leaseUntil} ELSE NULL END`,
       },
     })
+    .run()
 }
 
 export async function isJobRunning(db: Db, kind: string, targetId: string, now = new Date()) {
@@ -707,6 +707,31 @@ export async function runDueJobs(db: Db, handlers: Record<string, (targetId: str
   return jobs.length
 }
 
+// Update desired destinations without losing the actual Google location. Safe inside a settings transaction.
+export function retargetProjections(db: Db, userId: string, state: 'yes' | 'maybe', calendarId: string) {
+  return db.transaction((tx: Db) => {
+    const choices = tx
+      .select()
+      .from(eventDecision)
+      .where(
+        and(
+          eq(eventDecision.userId, userId),
+          eq(eventDecision.state, state),
+          or(isNull(eventDecision.destinationCalendarId), ne(eventDecision.destinationCalendarId, calendarId)),
+        ),
+      )
+      .all() as (typeof eventDecision.$inferSelect)[]
+    for (const choice of choices) {
+      tx.update(eventDecision)
+        .set({ destinationCalendarId: calendarId, updatedAt: new Date() })
+        .where(eq(eventDecision.id, choice.id))
+        .run()
+      enqueueJob(tx, 'projection', choice.id)
+    }
+    return choices.map((choice) => choice.id)
+  })
+}
+
 export async function reconcileProjection(
   db: Db,
   decisionId: string,
@@ -723,7 +748,12 @@ export async function reconcileProjection(
     ;[projection] = await db.select().from(eventProjection).where(eq(eventProjection.decisionId, decisionId))
   }
   const keepGoogle = keepStartedMaybe(source, decision.state)
-  if (!projection || (projection.syncState === 'conflict' && !force && !keepGoogle)) return
+  const recoveringMove =
+    projection?.conflictKind === 'remote_deleted' &&
+    !!decision.destinationCalendarId &&
+    !!projection.destinationCalendarId &&
+    decision.destinationCalendarId !== projection.destinationCalendarId
+  if (!projection || (projection.syncState === 'conflict' && !force && !keepGoogle && !recoveringMove)) return
   if (source.withdrawnAt && (decision.state === 'yes' || decision.state === 'maybe') && !force && !keepGoogle) {
     await db
       .update(eventProjection)
@@ -740,13 +770,33 @@ export async function reconcileProjection(
     if (!cal) return undefined
     const client = await clientForCalendar(cal.id)
     try {
-      return { cal, client, event: await client.getEvent(cal.googleCalendarId, projection.googleEventId) }
+      const event = await client.getEvent(cal.googleCalendarId, projection.googleEventId)
+      return event.status === 'cancelled' ? undefined : { cal, client, event }
     } catch (error) {
-      if (error instanceof GoogleApiError && error.status === 404) return undefined
+      if (error instanceof GoogleApiError && (error.status === 404 || error.status === 410)) return undefined
       throw error
     }
   }
-  const remote = await getRemote()
+  let remote = await getRemote()
+  // A move may have succeeded before its new mapping was committed.
+  if (!remote && desired && projection.destinationCalendarId && projection.destinationCalendarId !== desired) {
+    const [cal] = await db.select().from(calendar).where(eq(calendar.id, desired))
+    if (cal) {
+      const client = await clientForCalendar(cal.id)
+      const event = await client.findProjection(cal.googleCalendarId, projection.id)
+      if (event) {
+        await saveProjectionMapping(db, projection.id, desired, event, null)
+        projection = {
+          ...projection,
+          destinationCalendarId: desired,
+          googleEventId: event.id,
+          lastAppliedEtag: event.etag ?? null,
+          lastAppliedSourceRevision: null,
+        }
+        remote = { cal, client, event }
+      }
+    }
+  }
   if (keepGoogle) {
     const detached =
       remote &&
@@ -865,6 +915,7 @@ export async function reconcileProjection(
       remote.event.id,
       destination.googleCalendarId,
     )
+    await saveProjectionMapping(db, projection.id, desired, moved, null)
     const updated = await client.updateEvent(destination.googleCalendarId, moved.id, body, moved.etag)
     await saveProjectionMapping(db, projection.id, desired, updated, source.sourceRevision)
     return
@@ -886,7 +937,7 @@ async function saveProjectionMapping(
   projectionId: string,
   destinationCalendarId: string,
   event: GoogleEvent,
-  revision: string,
+  revision: string | null,
 ) {
   await db
     .update(eventProjection)
