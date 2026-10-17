@@ -30,7 +30,6 @@ import {
   syncNow,
   updateTask,
 } from '../server/calendar.functions'
-import { setGeminiKey as saveGeminiConnection } from '../server/ai.functions'
 import '../features/shell/app.css'
 
 export const Route = createFileRoute('/')({ loader: () => getViewer(), component: Home })
@@ -136,9 +135,6 @@ function Dashboard({ user }: { user: { id: string; name: string; email: string }
   const [visibleCalendarIds, setVisibleCalendarIds] = useState<Set<string>>(new Set())
   const [feedDialog, setFeedDialog] = useState(false)
   const [settingsDialog, setSettingsDialog] = useState(false)
-  const [geminiKey, setGeminiKey] = useState('')
-  const [geminiBusy, setGeminiBusy] = useState(false)
-  const [geminiError, setGeminiError] = useState('')
   const [feedUrl, setFeedUrl] = useState('')
   const [feedName, setFeedName] = useState('')
   const [busy, setBusy] = useState(false)
@@ -192,21 +188,6 @@ function Dashboard({ user }: { user: { id: string; name: string; email: string }
       ),
     [],
   )
-
-  async function updateGemini(apiKey: string | null) {
-    setGeminiBusy(true)
-    setGeminiError('')
-    try {
-      await saveGeminiConnection({ data: { apiKey } })
-      setGeminiKey('')
-      await load()
-      toast.success(apiKey === null ? 'Gemini disconnected' : 'Gemini API key saved')
-    } catch {
-      setGeminiError('Could not save Gemini settings. Please try again.')
-    } finally {
-      setGeminiBusy(false)
-    }
-  }
 
   async function refresh() {
     setBusy(true)
@@ -505,24 +486,9 @@ function Dashboard({ user }: { user: { id: string; name: string; email: string }
       )}
 
       {settingsDialog && (
-        <div
-          className="dialog-backdrop"
-          onMouseDown={() => {
-            setSettingsDialog(false)
-            setGeminiKey('')
-            setGeminiError('')
-          }}
-        >
+        <div className="dialog-backdrop" onMouseDown={() => setSettingsDialog(false)}>
           <div className="app-dialog settings-dialog" onMouseDown={(event) => event.stopPropagation()}>
-            <button
-              className="dialog-close"
-              onClick={() => {
-                setSettingsDialog(false)
-                setGeminiKey('')
-                setGeminiError('')
-              }}
-              aria-label="Close"
-            >
+            <button className="dialog-close" onClick={() => setSettingsDialog(false)} aria-label="Close">
               <IconX />
             </button>
             <div className="dialog-kicker">WORKSPACE</div>
@@ -547,41 +513,6 @@ function Dashboard({ user }: { user: { id: string; name: string; email: string }
                   : 'Connect Todoist'}
               </button>
             </div>
-            <form
-              className="settings-group"
-              onSubmit={(event) => {
-                event.preventDefault()
-                void updateGemini(geminiKey.trim())
-              }}
-            >
-              <h3>Gemini task estimates</h3>
-              <p>
-                {snapshot?.connections.gemini
-                  ? 'Connected. Enter a new key to replace it.'
-                  : 'Add your Gemini API key to enable duration estimates.'}{' '}
-                Open task titles, descriptions, and project names are sent to Gemini hourly.
-              </p>
-              <label>
-                Gemini API key
-                <input
-                  type="password"
-                  autoComplete="off"
-                  value={geminiKey}
-                  onChange={(event) => setGeminiKey(event.target.value)}
-                  placeholder={snapshot?.connections.gemini ? 'New API key' : 'API key'}
-                  maxLength={500}
-                />
-              </label>
-              {geminiError && <p role="alert">{geminiError}</p>}
-              <button type="submit" disabled={geminiBusy || !geminiKey.trim()}>
-                {geminiBusy ? 'Saving…' : snapshot?.connections.gemini ? 'Replace key' : 'Connect Gemini'}
-              </button>
-              {snapshot?.connections.gemini && (
-                <button type="button" disabled={geminiBusy} onClick={() => void updateGemini(null)}>
-                  Disconnect Gemini
-                </button>
-              )}
-            </form>
             <div className="settings-group">
               <h3>Calendar roles</h3>
               <p>

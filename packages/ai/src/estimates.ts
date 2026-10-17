@@ -1,16 +1,10 @@
 import { createHash } from 'node:crypto'
 import { and, asc, eq, isNull } from 'drizzle-orm'
-import { task, taskConnection, taskEstimate } from '@kairo/db/schema'
+import { task, taskEstimate } from '@kairo/db/schema'
 import type { DurationEstimator, EstimateInput } from './estimator.js'
 
 type Db = any
-export type RunEstimatesOptions = {
-  batchSize?: number
-  maxAgeDays?: number
-  limit?: number
-  now?: Date
-  ownerUserId?: string
-}
+export type RunEstimatesOptions = { batchSize?: number; maxAgeDays?: number; limit?: number; now?: Date }
 export type RunEstimatesResult = { selected: number; estimated: number; errors: string[] }
 
 export const estimateInputHash = (input: Pick<EstimateInput, 'title' | 'description' | 'projectName'>) =>
@@ -21,7 +15,7 @@ export const estimateInputHash = (input: Pick<EstimateInput, 'title' | 'descript
 // Open tasks with no user or provider duration whose estimate is missing, stale, or for different text.
 export function selectTasksNeedingEstimate(
   db: Db,
-  { maxAgeDays = 14, limit, now = new Date(), ownerUserId }: RunEstimatesOptions = {},
+  { maxAgeDays = 14, limit, now = new Date() }: RunEstimatesOptions = {},
 ) {
   const cutoff = now.getTime() - maxAgeDays * 86_400_000
   const rows: {
@@ -41,11 +35,9 @@ export function selectTasksNeedingEstimate(
       estimatedAt: taskEstimate.estimatedAt,
     })
     .from(task)
-    .innerJoin(taskConnection, eq(task.connectionId, taskConnection.id))
     .leftJoin(taskEstimate, eq(taskEstimate.taskId, task.id))
     .where(
       and(
-        ownerUserId === undefined ? undefined : eq(taskConnection.ownerUserId, ownerUserId),
         eq(task.completed, false),
         eq(task.deleted, false),
         isNull(task.durationOverrideMinutes),
