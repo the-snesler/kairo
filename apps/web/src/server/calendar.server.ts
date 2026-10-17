@@ -24,6 +24,7 @@ import {
 import { closestEventColorId, GOOGLE_EVENT_COLORS, GoogleApiError, type GoogleEvent } from '@kairo/integrations'
 import type { CalendarEvent, RecurringEventPatch, RecurringScope } from '../features/calendar/types'
 import type { TaskSummary } from '../features/tasks/types'
+import { geminiConnected } from './ai-connection'
 import { getAuthStatus, getSession, requireUser } from './auth'
 import {
   clientForCalendar,
@@ -320,6 +321,7 @@ export async function getCalendarSnapshotImpl(data: { start: string; end: string
     events,
     conflicts,
     connections: {
+      gemini: await geminiConnected(user.id),
       google: owned.length > 0,
       todoist: connections.some(
         (item) => !!item.providerSubject && !!item.encryptedCredentials && item.status !== 'reconnect',
