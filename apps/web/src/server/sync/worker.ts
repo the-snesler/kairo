@@ -1,4 +1,4 @@
-import { createEstimator, runEstimates, type DurationEstimator } from '@kairo/ai'
+import { runUserEstimates } from '../ai-connection'
 import { db, user } from '@kairo/db'
 import { processJobs, syncAll } from '../sync'
 
@@ -25,12 +25,19 @@ async function tick() {
   }
 }
 
-async function estimateTick(estimator: DurationEstimator) {
+async function estimateTick() {
   if (estimating) return
   estimating = true
   try {
-    const result = await runEstimates(db, estimator)
-    for (const error of result.errors) console.error('Task estimates:', error)
+    const users = await db.select({ id: user.id }).from(user)
+    for (const account of users) {
+      try {
+        const result = await runUserEstimates(account.id)
+        for (const error of result.errors) console.error('Task estimates:', error)
+      } catch (error) {
+        console.error('Task estimates:', error)
+      }
+    }
   } catch (error) {
     console.error('Task estimate worker:', error)
   } finally {
@@ -39,14 +46,7 @@ async function estimateTick(estimator: DurationEstimator) {
 }
 
 function startEstimates() {
-  let estimator: DurationEstimator | null = null
-  try {
-    estimator = createEstimator(process.env)
-  } catch (error) {
-    console.error('Task estimates disabled:', error)
-  }
-  if (!estimator) return
-  const run = () => void estimateTick(estimator)
+  const run = () => void estimateTick()
   estimateDelay = setTimeout(run, 60_000)
   estimateTimer = setInterval(run, 60 * 60_000)
 }

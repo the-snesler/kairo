@@ -143,6 +143,17 @@ export async function applyGoogleSnapshot(
   })
 }
 
+// Use the first withdrawal time so a future event never becomes eligible just because a retry is late.
+function keepStartedMaybe(source: typeof externalEvent.$inferSelect, state: string) {
+  return (
+    state === 'maybe' &&
+    !!source.withdrawnAt &&
+    (source.allDay
+      ? !!source.startDate && source.startDate <= source.withdrawnAt.toISOString().slice(0, 10)
+      : !!source.startAt && source.startAt <= source.withdrawnAt)
+  )
+}
+
 export async function applyIcsSnapshot(
   db: Db,
   sourceId: string,
@@ -220,14 +231,27 @@ export async function applyIcsSnapshot(
           : !!item.startAt && item.startAt < horizon.end && !!item.endAt && item.endAt > horizon.start) &&
         !seen.has(`${item.uid}\0${item.recurrenceId}`)
       ) {
-        tx.update(externalEvent).set({ withdrawnAt: now }).where(eq(externalEvent.id, item.id)).run()
+        const withdrawnAt = item.withdrawnAt ?? now
+        tx.update(externalEvent).set({ withdrawnAt }).where(eq(externalEvent.id, item.id)).run()
         const choices = tx.select().from(eventDecision).where(eq(eventDecision.externalEventId, item.id)).all()
         for (const choice of choices)
-          if (choice.state === 'yes' || choice.state === 'maybe')
+          if (choice.state === 'yes' || choice.state === 'maybe') {
+            if (keepStartedMaybe({ ...item, withdrawnAt }, choice.state)) {
+              tx.update(eventProjection)
+                .set({ syncState: 'pending', conflictKind: null, updatedAt: now })
+                .where(eq(eventProjection.decisionId, choice.id))
+                .run()
+              tx.insert(syncJob)
+                .values({ jobKey: `projection:${choice.id}`, kind: 'projection', targetId: choice.id, nextRunAt: now })
+                .onConflictDoUpdate({ target: syncJob.jobKey, set: { updatedAt: now } })
+                .run()
+              continue
+            }
             tx.update(eventProjection)
               .set({ syncState: 'conflict', conflictKind: 'source_withdrawn', updatedAt: now })
               .where(eq(eventProjection.decisionId, choice.id))
               .run()
+          }
       }
     tx.update(icsSource)
       .set({
@@ -698,8 +722,9 @@ export async function reconcileProjection(
     await db.insert(eventProjection).values({ decisionId, syncState: 'pending' }).onConflictDoNothing()
     ;[projection] = await db.select().from(eventProjection).where(eq(eventProjection.decisionId, decisionId))
   }
-  if (!projection || (projection.syncState === 'conflict' && !force)) return
-  if (source.withdrawnAt && (decision.state === 'yes' || decision.state === 'maybe') && !force) {
+  const keepGoogle = keepStartedMaybe(source, decision.state)
+  if (!projection || (projection.syncState === 'conflict' && !force && !keepGoogle)) return
+  if (source.withdrawnAt && (decision.state === 'yes' || decision.state === 'maybe') && !force && !keepGoogle) {
     await db
       .update(eventProjection)
       .set({ syncState: 'conflict', conflictKind: 'source_withdrawn', updatedAt: new Date() })
@@ -722,6 +747,64 @@ export async function reconcileProjection(
     }
   }
   const remote = await getRemote()
+  if (keepGoogle) {
+    const detached =
+      remote &&
+      (await remote.client.updateEvent(
+        remote.cal.googleCalendarId,
+        remote.event.id,
+        { extendedProperties: { private: { kairoProjectionId: null as unknown as string } } },
+        remote.event.etag,
+      ))
+    db.transaction((tx: Db) => {
+      if (projection.destinationCalendarId && projection.googleEventId) {
+        const cached = tx
+          .select()
+          .from(googleEvent)
+          .where(
+            and(
+              eq(googleEvent.calendarId, projection.destinationCalendarId),
+              eq(googleEvent.googleEventId, projection.googleEventId),
+            ),
+          )
+          .get()
+        tx.delete(googleEvent)
+          .where(
+            and(
+              eq(googleEvent.calendarId, projection.destinationCalendarId),
+              eq(googleEvent.googleEventId, projection.googleEventId),
+            ),
+          )
+          .run()
+        if (detached)
+          tx.insert(googleEvent)
+            .values({
+              ...normalizeGoogleEvent(projection.destinationCalendarId, detached),
+              projectionId: null,
+              color: cached?.color ?? null,
+            })
+            .run()
+      }
+      tx.update(eventDecision)
+        .set({ state: 'no', destinationCalendarId: null, decidedAt: new Date(), updatedAt: new Date() })
+        .where(eq(eventDecision.id, decision.id))
+        .run()
+      tx.update(eventProjection)
+        .set({
+          destinationCalendarId: null,
+          googleEventId: null,
+          lastAppliedSourceRevision: null,
+          lastAppliedEtag: null,
+          syncState: 'ready',
+          conflictKind: null,
+          lastError: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(eventProjection.id, projection.id))
+        .run()
+    })
+    return
+  }
   if (projection.googleEventId && !remote && desired && !force) {
     await db
       .update(eventProjection)
