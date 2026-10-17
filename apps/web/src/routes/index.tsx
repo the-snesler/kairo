@@ -8,7 +8,7 @@ import IconCircleDashed from '~icons/tabler/circle-dashed'
 import IconPlus from '~icons/tabler/plus'
 import IconX from '~icons/tabler/x'
 import { CalendarWorkspace, type CalendarEvent } from '../features/calendar/CalendarWorkspace'
-import type { NewTask, RecurringEventPatch, RecurringScope } from '../features/calendar/types'
+import type { NewTask, RecurringEventPatch, RecurringScope, Snapshot } from '../features/calendar/types'
 import { Sidebar } from '../features/shell/Sidebar'
 import { ProjectionConflicts } from '../features/shell/ProjectionConflicts'
 import { TaskPopover, type TaskChange } from '../features/tasks/TaskPopover'
@@ -34,8 +34,6 @@ import { setGeminiKey as saveGeminiConnection } from '../server/ai.functions'
 import '../features/shell/app.css'
 
 export const Route = createFileRoute('/')({ loader: () => getViewer(), component: Home })
-
-type Snapshot = Awaited<ReturnType<typeof getCalendarSnapshot>>
 
 const browserTimeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone
 const isoDate = (value: string) => new Date(value).toISOString()
@@ -383,6 +381,8 @@ function Dashboard({ user }: { user: { id: string; name: string; email: string }
         visibleCalendarIds={visibleCalendarIds}
         sources={snapshot?.sources || []}
         tasks={snapshot?.tasks || []}
+        conflicts={snapshot?.conflicts || []}
+        user={user}
         onTaskOpen={(id, anchor) => setOpenTask({ id, anchor })}
         onTaskComplete={(id) => {
           void taskChange(id, { completed: true }).catch(() => {})
@@ -424,27 +424,6 @@ function Dashboard({ user }: { user: { id: string; name: string; email: string }
             events={events}
             calendars={calendars}
             date={selectedDate}
-            toolbarActions={
-              <>
-                <button className="utility-button" aria-label="Add Maybe feed" onClick={() => setFeedDialog(true)}>
-                  <IconCircleDashed /> <span className="utility-feed-label">Add Maybe feed</span>
-                </button>
-                <button className="utility-button" aria-label="Settings" onClick={() => setSettingsDialog(true)}>
-                  {Boolean(snapshot.conflicts.length) && (
-                    <span className="utility-conflict-count" aria-label={`${snapshot.conflicts.length} sync conflicts`}>
-                      {snapshot.conflicts.length}
-                    </span>
-                  )}
-                  {user.name
-                    .split(' ')
-                    .map((part) => part[0])
-                    .slice(0, 2)
-                    .join('')
-                    .toUpperCase()}{' '}
-                  <IconChevronDown />
-                </button>
-              </>
-            }
             onDateChange={setSelectedDate}
             onVisibleDaysChange={visibleDaysChange}
             onVisibleRangeChange={visibleRange}

@@ -125,7 +125,7 @@ export function TaskPopover({ task, anchor, onClose, onChange, canEdit }: TaskPo
             Task
             {!canEdit && (
               <small>
-                <IconLock /> Read only
+                <IconLock className="inline" /> Read only
               </small>
             )}
           </span>

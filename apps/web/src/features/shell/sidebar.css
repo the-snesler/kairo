@@ -19,16 +19,7 @@
   letter-spacing: -0.03em;
   font-size: 20px;
 }
-.brand-mark {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  background: #9e86e8;
-  color: #1c1a24;
-  display: grid;
-  place-items: center;
-  font-size: 17px;
-}
+
 .sidebar-settings {
   margin-left: auto;
 }
@@ -116,9 +107,13 @@
 .mini-days button.range-start.range-end {
   border-radius: 8px;
 }
-.mini-days button.today {
+.mini-days button.today::after {
+  content: attr(data-number);
+  position: absolute;
+  inset: 3px;
+  display: grid;
+  place-items: center;
   background: #967cdb;
-  color: #14111e;
   border-radius: 8px;
   font-weight: 700;
 }

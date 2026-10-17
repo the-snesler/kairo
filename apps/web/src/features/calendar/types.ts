@@ -90,3 +90,5 @@ export interface NewTask {
 }
 import type { ReactNode } from 'react'
 import type { TaskDue, TaskPatch, TaskSummary } from '../tasks/types'
+import { getCalendarSnapshot } from '@/server/calendar.functions'
+export type Snapshot = Awaited<ReturnType<typeof getCalendarSnapshot>>

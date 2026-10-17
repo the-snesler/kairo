@@ -12,7 +12,6 @@ import {
 } from 'date-fns'
 import { useEffect, useMemo, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
-import IconCalendar from '~icons/tabler/calendar-month'
 import IconChevronLeft from '~icons/tabler/chevron-left'
 import IconChevronRight from '~icons/tabler/chevron-right'
 import IconChevronDown from '~icons/tabler/chevron-down'
@@ -28,6 +27,8 @@ import { dueLabel, formatDuration, groupTasks } from '../tasks/grouping'
 import type { TaskGroupId } from '../tasks/grouping'
 import type { TaskSummary } from '../tasks/types'
 import './sidebar.css'
+import { LiveIcon } from '../icon/LiveIcon'
+import type { Snapshot } from '@/features/calendar/types'
 
 export interface SidebarSource {
   id: string
@@ -40,6 +41,8 @@ interface Props {
   selectedDate: Date
   visibleDays: Date[]
   calendars: CalendarOption[]
+  conflicts: Snapshot['conflicts']
+  user: { id: string; name: string; email: string }
   visibleCalendarIds: Set<string>
   sources: SidebarSource[]
   tasks: TaskSummary[]
@@ -108,12 +111,21 @@ export function Sidebar(props: Props) {
   return (
     <aside className="kairo-sidebar">
       <div className="sidebar-brand">
-        <span className="brand-mark">
-          <IconCalendar />
-        </span>
+        <LiveIcon />
         <span>Kairo</span>
-        <button className="icon-button sidebar-settings" aria-label="Settings" onClick={props.onSettings}>
-          <IconSettings />
+        <button className="utility-button ml-auto" aria-label="Settings" onClick={props.onSettings}>
+          {Boolean(props.conflicts.length) && (
+            <span className="utility-conflict-count" aria-label={`${props.conflicts.length} sync conflicts`}>
+              {props.conflicts.length}
+            </span>
+          )}
+          {props.user.name
+            .split(' ')
+            .map((part) => part[0])
+            .slice(0, 2)
+            .join('')
+            .toUpperCase()}{' '}
+          <IconChevronDown />
         </button>
       </div>
       <div className="sidebar-scroll">
@@ -144,6 +156,7 @@ export function Sidebar(props: Props) {
                   onClick={() => props.onDateChange(day)}
                   aria-label={format(day, 'EEEE, MMMM d, yyyy')}
                   aria-current={isSameDay(day, today) ? 'date' : undefined}
+                  data-number={format(day, 'd')}
                 >
                   {format(day, 'd')}
                 </button>

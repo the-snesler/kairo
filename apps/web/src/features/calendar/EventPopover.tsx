@@ -204,7 +204,7 @@ export function EventPopover(props: EventPopoverProps) {
             )}
             {event && !editable && !external && (
               <small>
-                <IconLock /> Read only
+                <IconLock className="inline" /> Read only
               </small>
             )}
           </span>
