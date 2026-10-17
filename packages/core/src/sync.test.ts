@@ -185,6 +185,84 @@ test('a remote Google edit is preserved until explicit restore', async () => {
   )
 })
 
+test('changing Yes and Maybe moves the existing projection between calendars', async () => {
+  db.insert(calendar)
+    .values({ id: 'maybe-cal', connectedAccountId: 'account', googleCalendarId: 'maybe', name: 'Maybe' })
+    .run()
+  db.insert(externalEvent)
+    .values({
+      id: 'switch-event',
+      sourceId: 'source',
+      uid: 'switch-event',
+      recurrenceId: '',
+      title: 'Invitation',
+      allDay: true,
+      startDate: '2099-09-24',
+      endDate: '2099-09-25',
+      sourceRevision: 'switch-r1',
+    })
+    .run()
+  db.insert(eventDecision)
+    .values({
+      id: 'switch-decision',
+      userId: 'owner',
+      externalEventId: 'switch-event',
+      state: 'yes',
+      destinationCalendarId: 'cal',
+    })
+    .run()
+  let creates = 0
+  let remoteCalendar = 'primary'
+  let remote = { id: 'switch-copy', etag: 'created' }
+  const moves: string[][] = []
+  const client = {
+    findProjection: async () => undefined,
+    createEvent: async (calendarId: string) => {
+      creates++
+      remoteCalendar = calendarId
+      return remote
+    },
+    getEvent: async (calendarId: string, eventId: string) => {
+      assert.equal(calendarId, remoteCalendar)
+      assert.equal(eventId, remote.id)
+      return remote
+    },
+    moveEvent: async (from: string, eventId: string, to: string) => {
+      assert.equal(from, remoteCalendar)
+      assert.equal(eventId, remote.id)
+      moves.push([from, to])
+      remoteCalendar = to
+      remote = { ...remote, etag: `move-${moves.length}` }
+      return remote
+    },
+    updateEvent: async (calendarId: string, eventId: string) => {
+      assert.equal(calendarId, remoteCalendar)
+      assert.equal(eventId, remote.id)
+      remote = { ...remote, etag: `update-${moves.length}` }
+      return remote
+    },
+  } as unknown as GoogleCalendarClient
+  await reconcileProjection(db, 'switch-decision', async () => client)
+  for (const [state, destinationCalendarId] of [
+    ['maybe', 'maybe-cal'],
+    ['yes', 'cal'],
+  ] as const) {
+    db.update(eventDecision).set({ state, destinationCalendarId }).where(eq(eventDecision.id, 'switch-decision')).run()
+    await reconcileProjection(db, 'switch-decision', async () => client)
+    // Retrying the same decision must neither create nor move another copy.
+    await reconcileProjection(db, 'switch-decision', async () => client)
+    const projection = db.select().from(eventProjection).where(eq(eventProjection.decisionId, 'switch-decision')).get()!
+    assert.equal(projection.destinationCalendarId, destinationCalendarId)
+    assert.equal(projection.googleEventId, 'switch-copy')
+    assert.equal(projection.syncState, 'ready')
+  }
+  assert.equal(creates, 1)
+  assert.deepEqual(moves, [
+    ['primary', 'maybe'],
+    ['maybe', 'primary'],
+  ])
+})
+
 test('task sync keeps pending fields and the duration override, and fills project names', async () => {
   await applyTaskSync(db, 'todoist', {
     cursor: 'p-1',

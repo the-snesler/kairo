@@ -6,7 +6,6 @@ const rangeInput = z.object({ start: dateInput, end: dateInput })
 const decisionInput = z.object({
   eventId: z.string(),
   state: z.enum(['undecided', 'yes', 'maybe', 'no']),
-  calendarId: z.string().optional(),
 })
 const eventInput = z.object({
   id: z.string().optional(),

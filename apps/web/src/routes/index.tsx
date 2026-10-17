@@ -456,8 +456,8 @@ function Dashboard({ user }: { user: { id: string; name: string; email: string }
               mutation(() => deleteRecurringEvent({ data: { id: event.id, scope } }))
             }
             onFindOccurrence={(event, direction) => getAdjacentOccurrence({ data: { id: event.id, direction } })}
-            onDecisionChange={(event, state, calendarId) =>
-              mutation(() => decideExternalEvent({ data: { eventId: event.id, state, calendarId } }))
+            onDecisionChange={(event, state) =>
+              mutation(() => decideExternalEvent({ data: { eventId: event.id, state } }))
             }
             onTaskChange={taskChange}
             onTaskCreate={snapshot.connections.todoist ? taskCreate : undefined}

@@ -511,28 +511,21 @@ export async function setCalendarRoleImpl(data: {
   return { ok: true }
 }
 
-export async function decideExternalEventImpl(data: {
-  eventId: string
-  state: 'undecided' | 'yes' | 'maybe' | 'no'
-  calendarId?: string
-}) {
+export async function decideExternalEventImpl(data: { eventId: string; state: 'undecided' | 'yes' | 'maybe' | 'no' }) {
   const user = await requireUser()
   await ownedExternal(user.id, data.eventId)
-  let calendarId = data.calendarId
+  let calendarId: string | undefined
   if (data.state === 'yes' || data.state === 'maybe') {
-    if (calendarId) await ownedCalendar(user.id, calendarId)
-    else {
-      const rows = await db
-        .select()
-        .from(userCalendarSetting)
-        .where(
-          and(
-            eq(userCalendarSetting.userId, user.id),
-            data.state === 'yes' ? eq(userCalendarSetting.isDefault, true) : eq(userCalendarSetting.isMaybe, true),
-          ),
-        )
-      calendarId = rows[0]?.calendarId
-    }
+    const rows = await db
+      .select()
+      .from(userCalendarSetting)
+      .where(
+        and(
+          eq(userCalendarSetting.userId, user.id),
+          data.state === 'yes' ? eq(userCalendarSetting.isDefault, true) : eq(userCalendarSetting.isMaybe, true),
+        ),
+      )
+    calendarId = rows[0]?.calendarId
     if (!calendarId) throw new Error(`Choose a ${data.state === 'maybe' ? 'Maybe' : 'default'} calendar first`)
   }
   const [choice] = await db
