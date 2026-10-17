@@ -120,12 +120,12 @@ export function EventPopover(props: EventPopoverProps) {
     } else update({ allDay: true, start: dayKey(start), end: dayKey(addDays(lastDay, 1)) })
   }
 
-  const run = async (action: () => Promise<void>, fallback: string) => {
+  const run = async (action: () => Promise<void>, fallback: string, closeAfter = false) => {
     setBusy(true)
     setError('')
     try {
       await action()
-      props.onClose()
+      if (closeAfter) props.onClose()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : fallback)
     } finally {
@@ -138,6 +138,7 @@ export function EventPopover(props: EventPopoverProps) {
       void run(
         () => action({ ...draft, title: draft.title.trim() }),
         isTask ? 'Could not create task.' : 'Could not create event.',
+        isTask,
       )
   }
   const setDraftKind = (kind: DraftKind) => {
@@ -218,7 +219,7 @@ export function EventPopover(props: EventPopoverProps) {
               onClick={() =>
                 event.series && props.onDeleteOccurrence
                   ? props.onDeleteOccurrence(event)
-                  : void run(() => props.onDelete!(event), 'Could not delete event.')
+                  : void run(() => props.onDelete!(event), 'Could not delete event.', true)
               }
             >
               <IconTrash />

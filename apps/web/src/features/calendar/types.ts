@@ -55,6 +55,8 @@ export interface CalendarOption {
 
 export interface CalendarWorkspaceProps {
   events: CalendarEvent[]
+  /** Unfiltered events available to an open editor, including hidden calendars. */
+  editorEvents?: CalendarEvent[]
   calendars?: CalendarOption[]
   view?: CalendarView
   date?: Date
@@ -70,8 +72,8 @@ export interface CalendarWorkspaceProps {
   onVisibleDaysChange?: (days: Date[]) => void
   onVisibleRangeChange?: (start: Date, end: Date) => void
   onShowDeclinedChange?: (show: boolean) => void
-  onEventChange?: (event: CalendarEvent) => void | Promise<void>
-  onEventCreate?: (event: Omit<CalendarEvent, 'id'>) => void | Promise<void>
+  onEventChange?: (event: CalendarEvent) => void | string | Promise<void | string>
+  onEventCreate?: (event: Omit<CalendarEvent, 'id'>) => Promise<string>
   onEventDelete?: (event: CalendarEvent) => void | Promise<void>
   onDecisionChange?: (event: CalendarEvent, decision: EventDecision) => void | Promise<void>
   tasks?: TaskSummary[]

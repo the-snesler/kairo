@@ -38,6 +38,7 @@ import type { DropTarget, DropZone, ZoneHit } from './dnd/geometry'
 import { useCalendarDrag } from './dnd/useCalendarDrag'
 import type { DragSession } from './dnd/useCalendarDrag'
 import { EventPopover } from './EventPopover'
+import { followSavedEvent, type EditorState } from './editor'
 import type { EventDraft } from './EventPopover'
 import { diffRecurring, isEmptyPatch } from './recurring'
 import { RecurringScopeDialog } from './RecurringScopeDialog'
@@ -165,12 +166,6 @@ function taskEvent(task: TaskSummary): CalendarEvent {
     end: placeholder,
     allDay: true,
   })
-}
-
-interface EditorState {
-  eventId: string | null
-  draft: EventDraft | null
-  anchor: InspectorAnchor
 }
 
 // Stand-in id for the event being created, so it previews on the calendar while the popover is open.
@@ -415,7 +410,7 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
   useEffect(() => {
     setOverrides((current) => {
       const next = { ...current }
-      for (const event of sourceEvents)
+      for (const event of props.editorEvents ?? sourceEvents)
         if (
           next[event.id] &&
           parseEventDate(next[event.id].start, next[event.id].allDay).getTime() ===
@@ -447,7 +442,7 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
       }
       return Object.keys(next).length === Object.keys(current).length ? current : next
     })
-  }, [sourceEvents])
+  }, [sourceEvents, props.editorEvents])
 
   useEffect(() => {
     setCreated((current) => {
@@ -612,7 +607,8 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
       if (event.taskId) props.onTaskOpen?.(event.taskId, element)
       return
     }
-    if (event || draft) setEditor({ eventId: event?.id ?? null, draft, anchor: element })
+    if (event || draft)
+      setEditor({ sessionId: crypto.randomUUID(), eventId: event?.id ?? null, draft, anchor: element })
   }
 
   const canCreate = !!props.onEventCreate || !!props.onTaskCreate
@@ -649,7 +645,7 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
             )
           },
         }
-    setEditor({ eventId: null, draft, anchor })
+    setEditor({ sessionId: crypto.randomUUID(), eventId: null, draft, anchor })
   }
 
   // Creates appear at once: the optimistic card replaces the draft in the same render, the save runs in the
@@ -681,7 +677,12 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
   }
 
   const createEvent = async (draft: EventDraft) => {
-    createOptimistic({ ...draft, id: `pending-${crypto.randomUUID()}` }, () => props.onEventCreate?.(draft), 'Event')
+    const sessionId = editor?.sessionId
+    const id = await props.onEventCreate!(draft)
+    if (sessionId)
+      setEditor((current) =>
+        followSavedEvent(current, sessionId, { ...draft, id, recurring: !!draft.recurrence?.length }),
+      )
   }
 
   const createTask = async (draft: EventDraft) => {
@@ -723,18 +724,34 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
     }
   }
 
-  const editingEvent = editor?.eventId ? (visibleEvents.find((event) => event.id === editor.eventId) ?? null) : null
-  // The event can vanish under an open popover (deleted elsewhere, or moved to another calendar and re-keyed).
+  // Hidden/declined cards can leave the grid while their editor remains open.
+  const storedEditingEvent = editor?.eventId
+    ? (props.editorEvents ?? sourceEvents).find((event) => event.id === editor.eventId)
+    : undefined
+  const editingEvent = editor?.eventId
+    ? (visibleEvents.find((event) => event.id === editor.eventId) ??
+      (storedEditingEvent && (overrides[editor.eventId] ?? storedEditingEvent)) ??
+      editor.fallback ??
+      null)
+    : null
   useEffect(() => {
-    if (editor?.eventId && !editingEvent) setEditor(null)
-  }, [editor?.eventId, editingEvent])
+    if (!editor?.eventId || editor.saving) return
+    if (storedEditingEvent && editor.fallback)
+      setEditor((current) => (current?.sessionId === editor.sessionId ? { ...current, fallback: undefined } : current))
+    else if (!editingEvent) setEditor(null)
+  }, [editor, storedEditingEvent, editingEvent])
 
   // After jumping to another occurrence, open it once it has loaded and rendered.
   useEffect(() => {
     if (!awaiting || !visibleEvents.some((event) => event.id === awaiting.id)) return
     const frame = requestAnimationFrame(() => {
       const fallback = !(awaiting.anchor instanceof Element) || awaiting.anchor.isConnected ? awaiting.anchor : null
-      setEditor({ eventId: awaiting.id, draft: null, anchor: cardAnchor(awaiting.id) ?? fallback ?? centerAnchor() })
+      setEditor({
+        sessionId: crypto.randomUUID(),
+        eventId: awaiting.id,
+        draft: null,
+        anchor: cardAnchor(awaiting.id) ?? fallback ?? centerAnchor(),
+      })
       setAwaiting(null)
     })
     return () => cancelAnimationFrame(frame)
@@ -784,10 +801,19 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
     const saves = eventSaves.current
     const running = saves.has(changed.id)
     saves.set(changed.id, changed)
+    const sessionId = editor?.eventId === changed.id ? editor.sessionId : undefined
+    if (sessionId)
+      setEditor((current) =>
+        current?.sessionId === sessionId ? { ...current, fallback: changed, saving: true } : current,
+      )
     if (running) return
+    let savedId = changed.id
+    let lastSaved: CalendarEvent | undefined
     for (let next = changed; ;) {
       try {
-        await props.onEventChange?.(next)
+        const id = await props.onEventChange?.({ ...next, id: savedId })
+        savedId = id || savedId
+        lastSaved = { ...next, id: savedId }
       } catch (cause) {
         const failed = next
         setOverrides((current) => {
@@ -803,6 +829,13 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
       next = queued
     }
     saves.delete(changed.id)
+    if (sessionId)
+      setEditor((current) => {
+        if (current?.sessionId !== sessionId) return current
+        return lastSaved
+          ? followSavedEvent(current, sessionId, lastSaved)
+          : { ...current, saving: false, fallback: undefined }
+      })
   }
 
   /** Holds an occurrence edit locally; it's saved once a scope is chosen. */
@@ -833,7 +866,12 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
     if (!current) return
     const element = cardAnchor(current.original.id)
     const fallback = anchor && (!(anchor instanceof Element) || anchor.isConnected) ? anchor : centerAnchor()
-    setEditor({ eventId: current.original.id, draft: null, anchor: element ?? fallback })
+    setEditor({
+      sessionId: crypto.randomUUID(),
+      eventId: current.original.id,
+      draft: null,
+      anchor: element ?? fallback,
+    })
   }
 
   const message = (cause: unknown, fallback: string) => (cause instanceof Error ? cause.message : fallback)
@@ -1460,7 +1498,7 @@ export function CalendarWorkspace(props: CalendarWorkspaceProps) {
       )}
       {editor && (editingEvent || editor.draft) && (
         <EventPopover
-          key={editor.eventId ?? 'draft'}
+          key={editor.sessionId}
           event={editingEvent}
           draft={editingEvent ? null : editor.draft}
           anchor={editor.anchor}
