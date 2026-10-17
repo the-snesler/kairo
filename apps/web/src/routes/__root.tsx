@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { createRootRoute, HeadContent, Outlet, Scripts } from '@tanstack/react-router'
+import { LiveFavicon } from '../features/icon/LiveFavicon'
 import { Toaster } from 'sonner'
 import styles from '../styles.css?url'
 
@@ -10,7 +11,11 @@ export const Route = createRootRoute({
       { name: 'viewport', content: 'width=device-width, initial-scale=1' },
       { title: 'Kairo — calendar, tasks, maybe' },
     ],
-    links: [{ rel: 'stylesheet', href: styles }],
+    links: [
+      { rel: 'stylesheet', href: styles },
+      { rel: 'manifest', href: '/manifest.webmanifest' },
+      { rel: 'apple-touch-icon', href: '/apple-touch-icon.png' },
+    ],
   }),
   component: Root,
 })
@@ -28,6 +33,7 @@ function Document({ children }: { children: ReactNode }) {
     <html lang="en">
       <head>
         <HeadContent />
+        <LiveFavicon />
       </head>
       <body>
         {children}

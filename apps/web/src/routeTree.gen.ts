@@ -14,6 +14,7 @@ import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiGoogleCallbackRouteImport } from './routes/api/google/callback'
 import { Route as ApiGoogleConnectRouteImport } from './routes/api/google/connect'
+import { Route as ApiIconDayRouteImport } from './routes/api/icon.$day'
 import { Route as ApiTodoistCallbackRouteImport } from './routes/api/todoist/callback'
 import { Route as ApiTodoistConnectRouteImport } from './routes/api/todoist/connect'
 
@@ -42,6 +43,11 @@ const ApiGoogleConnectRoute = ApiGoogleConnectRouteImport.update({
   path: '/api/google/connect',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiIconDayRoute = ApiIconDayRouteImport.update({
+  id: '/api/icon/$day',
+  path: '/api/icon/$day',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiTodoistCallbackRoute = ApiTodoistCallbackRouteImport.update({
   id: '/api/todoist/callback',
   path: '/api/todoist/callback',
@@ -59,6 +65,7 @@ export interface FileRoutesByFullPath {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/google/callback': typeof ApiGoogleCallbackRoute
   '/api/google/connect': typeof ApiGoogleConnectRoute
+  '/api/icon/$day': typeof ApiIconDayRoute
   '/api/todoist/callback': typeof ApiTodoistCallbackRoute
   '/api/todoist/connect': typeof ApiTodoistConnectRoute
 }
@@ -68,6 +75,7 @@ export interface FileRoutesByTo {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/google/callback': typeof ApiGoogleCallbackRoute
   '/api/google/connect': typeof ApiGoogleConnectRoute
+  '/api/icon/$day': typeof ApiIconDayRoute
   '/api/todoist/callback': typeof ApiTodoistCallbackRoute
   '/api/todoist/connect': typeof ApiTodoistConnectRoute
 }
@@ -78,6 +86,7 @@ export interface FileRoutesById {
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/google/callback': typeof ApiGoogleCallbackRoute
   '/api/google/connect': typeof ApiGoogleConnectRoute
+  '/api/icon/$day': typeof ApiIconDayRoute
   '/api/todoist/callback': typeof ApiTodoistCallbackRoute
   '/api/todoist/connect': typeof ApiTodoistConnectRoute
 }
@@ -89,6 +98,7 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/api/google/callback'
     | '/api/google/connect'
+    | '/api/icon/$day'
     | '/api/todoist/callback'
     | '/api/todoist/connect'
   fileRoutesByTo: FileRoutesByTo
@@ -98,6 +108,7 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/api/google/callback'
     | '/api/google/connect'
+    | '/api/icon/$day'
     | '/api/todoist/callback'
     | '/api/todoist/connect'
   id:
@@ -107,6 +118,7 @@ export interface FileRouteTypes {
     | '/api/auth/$'
     | '/api/google/callback'
     | '/api/google/connect'
+    | '/api/icon/$day'
     | '/api/todoist/callback'
     | '/api/todoist/connect'
   fileRoutesById: FileRoutesById
@@ -117,6 +129,7 @@ export interface RootRouteChildren {
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiGoogleCallbackRoute: typeof ApiGoogleCallbackRoute
   ApiGoogleConnectRoute: typeof ApiGoogleConnectRoute
+  ApiIconDayRoute: typeof ApiIconDayRoute
   ApiTodoistCallbackRoute: typeof ApiTodoistCallbackRoute
   ApiTodoistConnectRoute: typeof ApiTodoistConnectRoute
 }
@@ -158,6 +171,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiGoogleConnectRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/icon/$day': {
+      id: '/api/icon/$day'
+      path: '/api/icon/$day'
+      fullPath: '/api/icon/$day'
+      preLoaderRoute: typeof ApiIconDayRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/todoist/callback': {
       id: '/api/todoist/callback'
       path: '/api/todoist/callback'
@@ -181,6 +201,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiGoogleCallbackRoute: ApiGoogleCallbackRoute,
   ApiGoogleConnectRoute: ApiGoogleConnectRoute,
+  ApiIconDayRoute: ApiIconDayRoute,
   ApiTodoistCallbackRoute: ApiTodoistCallbackRoute,
   ApiTodoistConnectRoute: ApiTodoistConnectRoute,
 }
