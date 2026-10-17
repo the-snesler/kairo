@@ -160,6 +160,7 @@ function Dashboard({ user }: { user: { id: string; name: string; email: string }
         previous.size ? previous : new Set(result.calendars.filter((item) => item.visible).map((item) => item.id)),
       )
       setError('')
+      return result
     } catch (cause) {
       if (current === requestRef.current) setError(String(cause))
     }
@@ -222,10 +223,11 @@ function Dashboard({ user }: { user: { id: string; name: string; email: string }
     }
   }
 
-  async function mutation(action: () => Promise<unknown>) {
+  async function mutation<T>(action: () => Promise<T>) {
     try {
-      await action()
+      const result = await action()
       await load()
+      return result
     } catch (cause) {
       setError(String(cause))
       throw cause
@@ -235,7 +237,7 @@ function Dashboard({ user }: { user: { id: string; name: string; email: string }
   async function eventSave(event: CalendarEvent) {
     const calendarId = event.calendarId
     if (!calendarId) throw new Error('Choose a calendar')
-    await mutation(() =>
+    const saved = await mutation(() =>
       saveGoogleEvent({
         data: {
           id: event.id,
@@ -252,6 +254,7 @@ function Dashboard({ user }: { user: { id: string; name: string; email: string }
         },
       }),
     )
+    return saved.id
   }
 
   async function recurringSave(event: CalendarEvent, patch: RecurringEventPatch, scope: RecurringScope) {
@@ -285,8 +288,8 @@ function Dashboard({ user }: { user: { id: string; name: string; email: string }
     const calendarId =
       event.calendarId || snapshot?.calendars.find((item) => item.isDefault)?.id || snapshot?.calendars[0]?.id
     if (!calendarId) throw new Error('Connect a writable Google calendar first')
-    // Creates skip `mutation`: the calendar reports their failures in a toast rather than the status banner.
-    await saveGoogleEvent({
+    // Keep creation errors in the draft popup so the user can correct and retry.
+    const saved = await saveGoogleEvent({
       data: {
         title: event.title,
         start: new Date(event.start).toISOString(),
@@ -300,7 +303,9 @@ function Dashboard({ user }: { user: { id: string; name: string; email: string }
         timeZone: browserTimeZone(),
       },
     })
-    await load()
+    const result = await load()
+    // A recurring creation is edited through its first occurrence, rather than the series master.
+    return result?.events.find((item) => item.series?.masterId === saved.id)?.id ?? saved.id
   }
 
   async function taskCreate(task: NewTask) {
@@ -422,6 +427,7 @@ function Dashboard({ user }: { user: { id: string; name: string; email: string }
         ) : (
           <CalendarWorkspace
             events={events}
+            editorEvents={snapshot.events}
             calendars={calendars}
             date={selectedDate}
             toolbarActions={
@@ -450,15 +456,17 @@ function Dashboard({ user }: { user: { id: string; name: string; email: string }
             onVisibleRangeChange={visibleRange}
             onEventChange={eventSave}
             onEventCreate={eventCreate}
-            onEventDelete={(event) => mutation(() => deleteGoogleEvent({ data: { id: event.id } }))}
+            onEventDelete={async (event) => {
+              await mutation(() => deleteGoogleEvent({ data: { id: event.id } }))
+            }}
             onRecurringEventChange={recurringSave}
-            onRecurringEventDelete={(event, scope) =>
-              mutation(() => deleteRecurringEvent({ data: { id: event.id, scope } }))
-            }
+            onRecurringEventDelete={async (event, scope) => {
+              await mutation(() => deleteRecurringEvent({ data: { id: event.id, scope } }))
+            }}
             onFindOccurrence={(event, direction) => getAdjacentOccurrence({ data: { id: event.id, direction } })}
-            onDecisionChange={(event, state) =>
-              mutation(() => decideExternalEvent({ data: { eventId: event.id, state } }))
-            }
+            onDecisionChange={async (event, state) => {
+              await mutation(() => decideExternalEvent({ data: { eventId: event.id, state } }))
+            }}
             onTaskChange={taskChange}
             onTaskCreate={snapshot.connections.todoist ? taskCreate : undefined}
             onTaskOpen={(id, anchor) => setOpenTask({ id, anchor })}
