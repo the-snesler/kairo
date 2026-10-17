@@ -109,3 +109,8 @@ test('runEstimates batches, upserts, and isolates batch failures', async () => {
   )
   assert.equal((await runEstimates(db, retry.estimator)).selected, 0)
 })
+
+test('estimate selection is scoped to the requested owner', () => {
+  assert.equal(selectTasksNeedingEstimate(db, { ownerUserId: 'another-user' }).length, 0)
+  assert.deepEqual(selectTasksNeedingEstimate(db, { ownerUserId: 'owner' }), selectTasksNeedingEstimate(db))
+})

@@ -98,7 +98,7 @@ test('snapshots and cursors commit together; retries upsert instead of duplicati
   assert.equal(db.select().from(externalEvent).all().length, 1)
   const eventId = db.select().from(externalEvent).get()!.id
   db.insert(eventDecision)
-    .values({ id: 'decision', userId: 'owner', externalEventId: eventId, state: 'maybe', destinationCalendarId: 'cal' })
+    .values({ id: 'decision', userId: 'owner', externalEventId: eventId, state: 'yes', destinationCalendarId: 'cal' })
     .run()
   db.insert(eventProjection).values({ id: 'projection', decisionId: 'decision', syncState: 'ready' }).run()
   await applyIcsSnapshot(db, 'source', [], {}, horizon)
@@ -496,4 +496,174 @@ test('blocks moved in Google move the task, or are restored when the provider is
   )
   assert.deepEqual(await applyTaskBlockMoves(db, 'cal', () => true), { pushed: [], reset: ['moved-block'] })
   db.delete(syncJob).run()
+})
+
+test('withdrawn started Maybe events keep the Google edit, retry safely, and stay detached', async () => {
+  const now = Date.now()
+  const start = new Date(now - 60_000),
+    end = new Date(now + 60_000)
+  db.insert(icsSource)
+    .values({ id: 'started-feed', ownerUserId: 'owner', url: 'https://example.test/started', name: 'Started' })
+    .run()
+  const horizon = { start: new Date(now - 86_400_000), end: new Date(now + 86_400_000) }
+  const occurrence = {
+    uid: 'started',
+    recurrenceId: '',
+    title: 'Original',
+    description: null,
+    location: null,
+    start: start.toISOString(),
+    end: end.toISOString(),
+    allDay: false,
+    cancelled: false,
+    revision: '1',
+  }
+  await applyIcsSnapshot(db, 'started-feed', [occurrence], {}, horizon)
+  const source = db.select().from(externalEvent).where(eq(externalEvent.sourceId, 'started-feed')).get()!
+  db.insert(eventDecision)
+    .values({
+      id: 'started-choice',
+      userId: 'owner',
+      externalEventId: source.id,
+      state: 'maybe',
+      destinationCalendarId: 'cal',
+    })
+    .run()
+  db.insert(eventProjection)
+    .values({
+      id: 'started-copy',
+      decisionId: 'started-choice',
+      destinationCalendarId: 'cal',
+      googleEventId: 'started-google',
+      lastAppliedEtag: 'old',
+      syncState: 'ready',
+    })
+    .run()
+  await applyIcsSnapshot(db, 'started-feed', [], {}, horizon)
+  assert.equal(
+    db.select().from(eventProjection).where(eq(eventProjection.id, 'started-copy')).get()?.syncState,
+    'pending',
+  )
+  assert.ok(db.select().from(syncJob).where(eq(syncJob.jobKey, 'projection:started-choice')).get())
+  let updates = 0
+  const remote = {
+    id: 'started-google',
+    etag: 'edited',
+    summary: 'User edit',
+    start: { dateTime: start.toISOString() },
+    end: { dateTime: end.toISOString() },
+  }
+  const client = {
+    getEvent: async () => remote,
+    updateEvent: async (_cal: string, _id: string, body: unknown, etag: string) => {
+      updates++
+      assert.deepEqual(body, { extendedProperties: { private: { kairoProjectionId: null } } })
+      assert.equal(etag, 'edited')
+      if (updates === 1) throw new Error('offline')
+      return { ...remote, etag: 'detached' }
+    },
+  } as unknown as GoogleCalendarClient
+  await assert.rejects(
+    reconcileProjection(db, 'started-choice', async () => client),
+    /offline/,
+  )
+  assert.equal(db.select().from(eventDecision).where(eq(eventDecision.id, 'started-choice')).get()?.state, 'maybe')
+  await reconcileProjection(db, 'started-choice', async () => client)
+  await reconcileProjection(db, 'started-choice', async () => client)
+  assert.equal(updates, 2)
+  assert.equal(db.select().from(eventDecision).where(eq(eventDecision.id, 'started-choice')).get()?.state, 'no')
+  const cached = db.select().from(googleEvent).where(eq(googleEvent.googleEventId, 'started-google')).get()!
+  assert.equal(cached.title, 'User edit')
+  assert.equal(cached.projectionId, null)
+  await applyIcsSnapshot(db, 'started-feed', [occurrence], {}, horizon)
+  assert.equal(db.select().from(eventDecision).where(eq(eventDecision.id, 'started-choice')).get()?.state, 'no')
+})
+
+test('future Maybe withdrawals still need a decision even if reconciliation runs after the start', async () => {
+  const start = new Date(Date.now() - 60_000)
+  db.insert(externalEvent)
+    .values({
+      id: 'future-withdrawn',
+      sourceId: 'source',
+      uid: 'future-withdrawn',
+      recurrenceId: '',
+      title: 'Future when removed',
+      startAt: start,
+      endAt: new Date(),
+      sourceRevision: '1',
+      withdrawnAt: new Date(start.getTime() - 60_000),
+    })
+    .run()
+  db.insert(eventDecision)
+    .values({
+      id: 'future-choice',
+      userId: 'owner',
+      externalEventId: 'future-withdrawn',
+      state: 'maybe',
+      destinationCalendarId: 'cal',
+    })
+    .run()
+  await reconcileProjection(db, 'future-choice', async () => {
+    throw new Error('Should not call Google')
+  })
+  assert.equal(
+    db.select().from(eventProjection).where(eq(eventProjection.decisionId, 'future-choice')).get()?.conflictKind,
+    'source_withdrawn',
+  )
+})
+
+test('all-day Maybe withdrawals use the start date and preserve the first withdrawal time', async () => {
+  const now = Date.now()
+  const today = new Date(now).toISOString().slice(0, 10)
+  const tomorrow = new Date(now + 86_400_000).toISOString().slice(0, 10)
+  const after = new Date(now + 2 * 86_400_000).toISOString().slice(0, 10)
+  db.insert(icsSource)
+    .values({ id: 'all-day-feed', ownerUserId: 'owner', url: 'https://example.test/all-day', name: 'All day' })
+    .run()
+  for (const [id, startDate, endDate] of [
+    ['today', today, tomorrow],
+    ['tomorrow', tomorrow, after],
+  ]) {
+    db.insert(externalEvent)
+      .values({
+        id: `all-day-${id}`,
+        sourceId: 'all-day-feed',
+        uid: id!,
+        recurrenceId: '',
+        title: id!,
+        allDay: true,
+        startDate,
+        endDate,
+        sourceRevision: '1',
+      })
+      .run()
+    db.insert(eventDecision)
+      .values({
+        id: `all-day-${id}`,
+        userId: 'owner',
+        externalEventId: `all-day-${id}`,
+        state: 'maybe',
+        destinationCalendarId: 'cal',
+      })
+      .run()
+    db.insert(eventProjection)
+      .values({ decisionId: `all-day-${id}`, syncState: 'ready' })
+      .run()
+  }
+  const horizon = { start: new Date(today), end: new Date(after) }
+  await applyIcsSnapshot(db, 'all-day-feed', [], {}, horizon)
+  assert.equal(
+    db.select().from(eventProjection).where(eq(eventProjection.decisionId, 'all-day-today')).get()?.syncState,
+    'pending',
+  )
+  assert.equal(
+    db.select().from(eventProjection).where(eq(eventProjection.decisionId, 'all-day-tomorrow')).get()?.conflictKind,
+    'source_withdrawn',
+  )
+  const withdrawn = db.select().from(externalEvent).where(eq(externalEvent.id, 'all-day-tomorrow')).get()!.withdrawnAt
+  await applyIcsSnapshot(db, 'all-day-feed', [], {}, horizon)
+  assert.deepEqual(
+    db.select().from(externalEvent).where(eq(externalEvent.id, 'all-day-tomorrow')).get()!.withdrawnAt,
+    withdrawn,
+  )
 })
