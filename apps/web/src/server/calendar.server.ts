@@ -19,6 +19,7 @@ import {
   enqueueJob,
   normalizeGoogleEvent,
   reconcileProjection,
+  retargetProjections,
   syncTaskBlocks,
 } from '@kairo/core'
 import { closestEventColorId, GOOGLE_EVENT_COLORS, GoogleApiError, type GoogleEvent } from '@kairo/integrations'
@@ -484,8 +485,8 @@ export async function setCalendarRoleImpl(data: {
 }) {
   const user = await requireUser()
   const cal = await ownedCalendar(user.id, data.calendarId)
-  if (data.role === 'tasks' && data.active && cal.accessRole !== 'owner' && cal.accessRole !== 'writer')
-    throw new Error('Choose a writable calendar for tasks')
+  if (data.active && cal.accessRole !== 'owner' && cal.accessRole !== 'writer')
+    throw new Error('Choose a writable calendar')
   const field = { default: 'isDefault', maybe: 'isMaybe', tasks: 'isTasks' } as const
   const key = field[data.role]
   db.transaction((tx) => {
@@ -501,13 +502,15 @@ export async function setCalendarRoleImpl(data: {
         set: { [key]: data.active },
       })
       .run()
+    if (data.active && data.role !== 'tasks')
+      retargetProjections(tx, user.id, data.role === 'default' ? 'yes' : 'maybe', data.calendarId)
   })
   if (data.role === 'tasks' || data.role === 'default') {
     const calendarId = await taskMirrorCalendarId(user.id)
     const connections = await db.select().from(taskConnection).where(eq(taskConnection.ownerUserId, user.id))
     for (const connection of connections) await syncTaskBlocks(db, { connectionId: connection.id }, calendarId)
-    void processJobs().catch((error) => console.error('Task sync failed', error))
   }
+  void processJobs().catch((error) => console.error('Calendar destination sync failed', error))
   return { ok: true }
 }
 
