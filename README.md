@@ -2,6 +2,9 @@
 
 Kairo is a self-hosted calendar workspace for ordinary Google events, Todoist tasks, and ICS events you may or may not attend. It runs with TanStack Start, SQLite storage, and a background sync worker.
 
+<img width="1710" height="1074" alt="4FD409AD-0E28-4094-B67F-A00BEFD57C57" src="https://github.com/user-attachments/assets/7ef9740d-ea02-46c6-bb96-4f638bfd380b" />
+
+
 ## Start locally
 
 Requires Node 24 and pnpm 10. Copy `.env.example` to `.env`, then set `BETTER_AUTH_SECRET` and `ENCRYPTION_KEY` to separate random values of at least 32 characters. Put your Google OAuth web client ID and secret in `.env`, or point `GOOGLE_OAUTH_CLIENT_FILE` at its JSON file. Set `TODOIST_CLIENT_ID` and `TODOIST_CLIENT_SECRET` from your Todoist app.
